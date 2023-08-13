@@ -1,0 +1,23 @@
+type Mutation {
+  quickinsert_customer_one(
+    object: quickinsert_customer_one_InputObject!
+  ): customer_ActionType
+}
+
+input quickinsert_customer_one_InputObject {
+  date_of_birth: date
+  external_ref_list: [String!]!
+  first_name: String!
+  last_name: String
+}
+
+type customer_ActionType {
+  created_at: timestamptz!
+  date_of_birth: date
+  external_ref_list: [String!]!
+  first_name: String!
+  id: uuid!
+  last_name: String
+  updated_at: timestamptz
+}
+

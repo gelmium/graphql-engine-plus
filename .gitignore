@@ -1,0 +1,10 @@
+.DS_STORE
+.vscode
+.env
+.make.env
+*.out
+*.log
+# add ignore rules for python
+*.py[cod]
+# add ignore rules for golang
+*.exe

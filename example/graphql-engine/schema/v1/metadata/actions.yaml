@@ -1,0 +1,30 @@
+actions:
+  - name: quickinsert_customer_one
+    definition:
+      kind: synchronous
+      handler: http://localhost:8888
+      request_transform:
+        body:
+          action: transform
+          template: |-
+            {
+              "execfile": "quickinsert_to_redis_json.py",
+              "payload": {
+                "table": {
+                  "name": "customer",
+                  "schema": "public"
+                },
+                "input": {{$body.input}}
+              }
+            }
+        template_engine: Kriti
+        version: 2
+    permissions:
+      - role: user
+custom_types:
+  enums: []
+  input_objects:
+    - name: quickinsert_customer_one_InputObject
+  objects:
+    - name: customer_ActionType
+  scalars: []

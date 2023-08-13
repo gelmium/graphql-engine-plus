@@ -1,0 +1,68 @@
+url: 'http://localhost:8000/public/graphql/v1'
+headers:
+  X-Hasura-Admin-Secret: gelsemium
+  # X-Hasura-Role: user
+  # X-Hasura-User-Id: 1
+# "Debug" mode enables request and response logging for Autocannon and K6
+# This lets you see what is happening and confirm proper behavior.
+# This should be disabled for genuine benchmarks, and only used for debugging/visibility.
+debug: false
+queries:
+    # Name: Unique name for the query
+    # Tools: List of benchmarking tools to run: ['autocannon', 'k6', 'wrk2']
+    # Execution Strategy: the type of the benchmark to run. Options are: 
+    # REQUESTS_PER_SECOND: Fixed duration, fixed rps. Example parameters:
+    #   duration: 10s
+    #   rps: 500
+    # FIXED_REQUEST_NUMBER: Complete requests as fast as possible, no duration. Example parameters:
+    #   requests: 10000
+    # MAX_REQUESTS_IN_DURATION: Make as many requests as possible in duration. Example parameters:
+    #   duration: 10s
+    # MULTI_STAGE: (K6 only currently) Several stages of REQUESTS_PER_SECOND benchmark. Example parameters:
+    #   initial_rps: 0
+    #   stages:
+    #     - duration: 5s
+    #       target: 100
+    #     - duration: 10s
+    #       target: 1000
+    # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
+  - name: Create-Customer
+    tools: [k6, autocannon]
+    # execution_strategy: REQUESTS_PER_SECOND
+    # rps: 20
+    # duration: 60s
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 10000
+    connections: 10
+    query: |
+      mutation CustomerMutation {
+        insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) {
+          updated_at
+          last_name
+          id
+          first_name
+          external_ref_list
+          created_at
+          date_of_birth
+        }
+      }
+  - name: QuickInsert-Customer
+    tools: [k6, autocannon]
+    # execution_strategy: REQUESTS_PER_SECOND
+    # rps: 20
+    # duration: 60s
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 10000
+    connections: 10  # concurency 10 is optimal
+    query: |
+      mutation InsertMutation {
+        quickinsert_customer_one(object: {first_name: "test2", external_ref_list: ["text_external_ref2"], last_name: "cus"}) {
+          id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
+        }
+      }

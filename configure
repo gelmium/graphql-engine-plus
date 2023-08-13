@@ -1,0 +1,5 @@
+#!/bin/bash
+[ -f ".env" ] || cp default.env .env
+[ -f ".make.env" ] || cp default.make.env .make.env
+[ -f "~/.Makefile" ] || touch ~/.Makefile
+echo "This script setup all system config/files which required to run the project"

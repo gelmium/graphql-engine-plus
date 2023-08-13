@@ -1,0 +1,42 @@
+# this is an example docker-compose.yml file to run the graphql-engine-plus image
+version: '3.6'
+services:
+  postgres:
+    image: postgres:13.4-alpine
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: example_graphql_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGUSER: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "--quiet"]
+      interval: 5s
+      timeout: 3s
+    ports:
+      - "5432:5432"
+  graphql-engine:
+    image: gelmium/graphql-engine-plus:latest
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./example/graphql-engine/schema:/graphql-engine/schema
+      - ./example/graphql-engine/scripts:/graphql-engine/scripts
+    env_file:
+      - ./.env
+  redis:  # port 6379, 8001 -> Redis Insight UI
+    image: redis/redis-stack:latest
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+volumes:
+  db_data:
+    driver: local
+  redis-data:
+    driver: local
