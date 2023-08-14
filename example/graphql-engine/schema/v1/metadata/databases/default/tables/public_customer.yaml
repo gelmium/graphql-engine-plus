@@ -13,6 +13,13 @@ insert_permissions:
         - created_at
         - updated_at
         - id
+      validate_input:
+        definition:
+          forward_client_headers: true
+          headers: []
+          timeout: 10
+          url: http://localhost:8888/validate?execfile=quick_validate.py
+        type: http
     comment: ""
 select_permissions:
   - role: user

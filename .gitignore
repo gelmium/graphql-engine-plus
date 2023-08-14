@@ -4,6 +4,8 @@
 .make.env
 *.out
 *.log
+report.html
+report.json
 # add ignore rules for python
 *.py[cod]
 # add ignore rules for golang

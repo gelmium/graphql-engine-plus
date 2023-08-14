@@ -16,7 +16,8 @@ import time
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
 async_tasks = []
-execfile_cache = {}
+exec_cache = {}
+
 
 async def exec_script(request, body):
     transport = AIOHTTPTransport(
@@ -25,21 +26,25 @@ async def exec_script(request, body):
     )
     execfile = body.get("execfile")
     if execfile:
-        execfile_content = execfile_cache.get(execfile)
-        if not execfile_content:
-            with open(os.path.join('/graphql-engine/scripts', execfile), "r") as f:
+        execfile_content = exec_cache.get(execfile)
+        if not execfile_content or body.get("execfresh"):
+            with open(os.path.join("/graphql-engine/scripts", execfile), "r") as f:
                 execfile_content = f.read()
-            execfile_cache[execfile] = execfile_content    
+            exec_cache[execfile] = execfile_content
         exec(execfile_content)
-        
+
     # The below functionality is required only if want to
     # add/modify script on the fly without deployment
     if bool(os.environ.get("ALLOW_UNSAFE_SCRIPT_EXECUTION")):
-        execurl = body.get('execurl')
+        execurl = body.get("execurl")
         if execurl:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(execurl) as resp:
-                    exec(await resp.text())
+            execurl_content = exec_cache.get(execfile)
+            if not execfile_content or body.get("execfresh"):
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(execurl) as resp:
+                        execurl_content = await resp.text()
+                exec_cache[execurl] = execurl_content
+            exec(execurl_content)
     # the script must define this function: `async def main(request, body, transport):`
     # so it can be executed here in curent context
     task = asyncio.get_running_loop().create_task(
@@ -63,9 +68,9 @@ async def execute_code_handler(request: web.Request):
         await exec_script(request, body)
         ### the script can modify the body['payload'] to transform the return data
         status_code = 200
-        result = body['payload']
+        result = body["payload"]
     except Exception as e:
-        if isinstance(e, SyntaxError):
+        if isinstance(e, (SyntaxError, ValueError)):
             status_code = 400
         else:
             status_code = 500
@@ -76,6 +81,8 @@ async def execute_code_handler(request: web.Request):
             ),
             "traceback": str(traceback.format_exc()),
         }
+        logger = logging.getLogger("aiohttp.error")
+        logger.error(result)
     # Return the result of the Python code execution.
     return web.Response(
         status=status_code,
@@ -86,16 +93,30 @@ async def execute_code_handler(request: web.Request):
         text=json.dumps(result),
     )
 
-async def validate_json(request: web.Request):
-        # mark starting time
+
+async def validate_json_code_handler(request: web.Request):
+    # mark starting time
     start_time = time.time()
     try:
-        # Get the Python code from the JSON request body
-        result = json.loads(await request.text())
-        logging.info(result)
+        # get the request GET params
+        params = dict(request.query)
+        # Get the Python code from the params and assign to body
+        payload = json.loads(await request.text())
+        body = {"payload": payload}
+        body["execfile"] = params.get("execfile")
+        body["execurl"] = params.get("execurl")
+        body["execasync"] = params.get("execasync")
+        body["execfresh"] = params.get("execfresh")
+        ### execute the python script in the body
+        await exec_script(request, body)
+        ### the script can modify the body['payload'] to transform the return data
         status_code = 200
+        result = body["payload"]
     except Exception as e:
-        status_code = 500
+        if isinstance(e, (SyntaxError, ValueError)):
+            status_code = 400
+        else:
+            status_code = 500
         result = {
             "error": str(e.__class__.__name__),
             "message": str(
@@ -103,6 +124,12 @@ async def validate_json(request: web.Request):
             ),
             "traceback": str(traceback.format_exc()),
         }
+        logger = logging.getLogger("aiohttp.error")
+        logger.error(result)
+        if isinstance(e, ValueError):
+            # for Validation Error, remove the error, traceback
+            del result["error"]
+            del result["traceback"]
     # Return the result of the Python code execution.
     return web.Response(
         status=status_code,
@@ -112,6 +139,7 @@ async def validate_json(request: web.Request):
         },
         text=json.dumps(result),
     )
+
 
 async def get_app():
     # Create the HTTP server.
@@ -130,7 +158,7 @@ async def get_app():
     app.router.add_post("/", execute_code_handler)
     app.router.add_post("", execute_code_handler)
     # add validate scripting endpoint
-    app.router.add_post("/validate", validate_json)
+    app.router.add_post("/validate", validate_json_code_handler)
 
     # Create the access logger.
     logger = logging.getLogger("aiohttp.access")
