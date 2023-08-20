@@ -145,9 +145,15 @@ async def get_app():
     # Create the HTTP server.
     app = web.Application()
     # init dependencies
-    redis_url = os.environ.get("REDIS_DATABASE_URL")
+    redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
     if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
+    redis_cluster_url = os.environ.get("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+    if redis_cluster_url:
+        app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
+        if not redis_url or redis_url == redis_cluster_url:
+            app["redis_client"] = app["redis_cluster"]
+
     app["psql_client"] = await asyncpg.connect(
         dsn=os.environ["HASURA_GRAPHQL_DATABASE_URL"]
     )

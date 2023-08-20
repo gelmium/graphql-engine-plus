@@ -58,6 +58,10 @@ http {
     keepalive 100;
     server 127.0.0.1:8882;
   }
+  upstream replica_upstream {
+    keepalive 100;
+    server 127.0.0.1:${REPLICA_PORT};
+  }
   # This is to serve TCP health-check of AWS Network Load Balancers (NLB)
   server {
     listen 480;
@@ -120,6 +124,32 @@ http {
       proxy_send_timeout      20;
       proxy_read_timeout      40;
       proxy_pass http://v1_upstream/api/rest/$1$is_args$args;
+    }
+
+    location = /public/graphql/readonly/v1{
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "Upgrade";
+      proxy_set_header Host $host;
+      proxy_redirect off;
+      expires off;
+      proxy_connect_timeout   10;
+      proxy_send_timeout      20;
+      proxy_read_timeout      40;
+      proxy_pass http://replica_upstream/v1/graphql;
+    }
+
+    location ~ ^/public/graphql/readonly/rest/v1/(.+)$ {
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "Upgrade";
+      proxy_set_header Host $host;
+      proxy_redirect off;
+      expires off;
+      proxy_connect_timeout   10;
+      proxy_send_timeout      20;
+      proxy_read_timeout      40;
+      proxy_pass http://replica_upstream/api/rest/$1$is_args$args;
     }
   }
 

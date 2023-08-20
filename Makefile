@@ -44,6 +44,9 @@ build.out: build  ## build project and output build artifact (docker image/lambd
 	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
 	touch build.out
 
+build.push: build.out  ## build project and push build artifact (docker image/lambda zip file) to registry
+	docker push $(LOCAL_DOCKER_IMG_REPO):latest
+
 clean:  ## clean up build artifacts
 	rm -rf ./dist ./build
 	rm -f .*.out *.out
