@@ -60,7 +60,7 @@ http {
   }
   upstream replica_upstream {
     keepalive 100;
-    server 127.0.0.1:${REPLICA_PORT};
+    server 127.0.0.1:8880;
   }
   # This is to serve TCP health-check of AWS Network Load Balancers (NLB)
   server {
