@@ -24,13 +24,15 @@ hasura-metadatav1-show-inconsistent:  ## show inconsistent metadata yaml files i
 
 hasura-migratev1-create-migration-from-server:
 	docker-compose exec graphql-engine hasura migrate create "CHANGE-ME" --from-server --database-name default --project ./schema/v1 --schema public
-
+hasura-deploy-v1:
+	docker-compose exec graphql-engine hasura deploy --project ./schema/v1
 
 run-migrate-hasura:
 	docker-compose run graphql-engine /root/migrate_hasura.sh
 run-graphql-benchmark:
-	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
-
+	docker run --rm --name graphql-bench --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
+run-redis-insight:
+	docker run --rm --name redisinsight -p 5000:8001 redislabs/redisinsight:latest
 redis-del-all-data:
 	docker-compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
 	
@@ -50,3 +52,7 @@ build.push: build.out  ## build project and push build artifact (docker image/la
 clean:  ## clean up build artifacts
 	rm -rf ./dist ./build
 	rm -f .*.out *.out
+
+
+build.runner:
+	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner

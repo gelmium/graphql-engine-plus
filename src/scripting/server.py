@@ -17,13 +17,14 @@ import time
 # this also prevent the tasks from being garbage collected
 async_tasks = []
 exec_cache = {}
+aio_http_transport = AIOHTTPTransport(
+    url="http://localhost:8881/v1/graphql",
+    headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
+)
+allow_unsafe_script_execution = bool(os.environ.get("ALLOW_UNSAFE_SCRIPT_EXECUTION"))
 
 
 async def exec_script(request, body):
-    transport = AIOHTTPTransport(
-        url="http://localhost:8881/v1/graphql",
-        headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
-    )
     execfile = body.get("execfile")
     if execfile:
         execfile_content = exec_cache.get(execfile)
@@ -35,11 +36,11 @@ async def exec_script(request, body):
 
     # The below functionality is required only if want to
     # add/modify script on the fly without deployment
-    if bool(os.environ.get("ALLOW_UNSAFE_SCRIPT_EXECUTION")):
+    if allow_unsafe_script_execution:
         execurl = body.get("execurl")
         if execurl:
-            execurl_content = exec_cache.get(execfile)
-            if not execfile_content or body.get("execfresh"):
+            execurl_content = exec_cache.get(execurl)
+            if not execurl_content or body.get("execfresh"):
                 async with aiohttp.ClientSession() as session:
                     async with session.get(execurl) as resp:
                         execurl_content = await resp.text()
@@ -47,9 +48,23 @@ async def exec_script(request, body):
             exec(execurl_content)
     # the script must define this function: `async def main(request, body, transport):`
     # so it can be executed here in curent context
-    task = asyncio.get_running_loop().create_task(
-        locals()["main"](request, body, transport)
-    )
+    try:
+        task = asyncio.get_running_loop().create_task(
+            locals()["main"](request, body, aio_http_transport)
+        )
+    except KeyError:
+        if body.get("execurl") and not allow_unsafe_script_execution:
+            raise Exception(
+                "To execute script from URL (execurl), must set ALLOW_UNSAFE_SCRIPT_EXECUTION=true"
+            )
+        else:
+            raise Exception(
+                "The script must define this function: `async def main(request, body, transport):`"
+            )
+    except TypeError:
+        raise Exception(
+            "The script must define this function: `async def main(request, body, transport):`"
+        )
     if getattr(body, "execasync", False):
         async_tasks.append(task)
         task.add_done_callback(lambda x: async_tasks.remove(task))
@@ -140,6 +155,17 @@ async def validate_json_code_handler(request: web.Request):
         text=json.dumps(result),
     )
 
+async def healthcheck_graphql_engine(request: web.Request):
+    async with aiohttp.ClientSession() as session:
+        async with session.get('http://localhost:8881/healthz?strict=true') as resp:
+            # extract the response status code and body
+            return web.Response(
+                status=resp.status,
+                headers={
+                    "Content-type": "application/json",
+                },
+                text=json.dumps({"status": await resp.text()}),
+            )
 
 async def get_app():
     # Create the HTTP server.
@@ -158,7 +184,8 @@ async def get_app():
         dsn=os.environ["HASURA_GRAPHQL_DATABASE_URL"]
     )
     # add health check endpoint
-    app.router.add_get("", lambda x: web.Response(status=200, text="OK"))
+    app.router.add_get("", healthcheck_graphql_engine)
+    app.router.add_get("/health/engine", healthcheck_graphql_engine)
     app.router.add_get("/health", lambda x: web.Response(status=200, text="OK"))
     # add main scripting endpoint
     app.router.add_post("/", execute_code_handler)

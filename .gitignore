@@ -10,3 +10,4 @@ report.json
 *.py[cod]
 # add ignore rules for golang
 *.exe
+*.o

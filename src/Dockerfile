@@ -39,4 +39,4 @@ ADD ./proxy/migrate_hasura.sh /root/migrate_hasura.sh
 CMD /root/container_start.sh
 EXPOSE 8000
 # Add healthcheck
-HEALTHCHECK --interval=30s --timeout=3s CMD (curl --fail http://localhost:8881/healthz?strict=true && curl --fail http://localhost:8000/public/graphql/health) || exit 1
+HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:8888/health/engine || exit 1

@@ -16,6 +16,17 @@ services:
       timeout: 3s
     ports:
       - "5432:5432"
+  redis:  # port 6379, 8001 -> Redis Insight UI
+    image: redis/redis-stack:latest
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
   graphql-engine:
     image: gelmium/graphql-engine-plus:latest
     ports:
@@ -29,13 +40,15 @@ services:
       - ./example/graphql-engine/scripts:/graphql-engine/scripts
     env_file:
       - ./.env
-  redis:  # port 6379, 8001 -> Redis Insight UI
-    image: redis/redis-stack:latest
-    volumes:
-      - redis-data:/data
+  runner:
+    image: apprunner-example:latest
     ports:
-      - "6379:6379"
-      - "8001:8001"
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./.env
 volumes:
   db_data:
     driver: local

@@ -57,6 +57,7 @@
         "esbenp.prettier-vscode",
         "GitHub.copilot",
         "GitHub.copilot-labs",
+        "GitHub.copilot-chat",
         "Prisma.prisma",
         "yoavbls.pretty-ts-errors",
         "GraphQL.vscode-graphql-syntax",

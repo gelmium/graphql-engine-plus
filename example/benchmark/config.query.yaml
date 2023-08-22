@@ -1,5 +1,8 @@
 url: 'http://localhost:8000/public/graphql/v1'
+# url: 'http://localhost:8000/public/graphql/readonly/v1'
 # url: 'http://localhost:8881/v1/graphql'
+# url: 'http://localhost:3000/v1/graphql'
+# url: 'https://kifm2e4ux2.ap-southeast-1.awsapprunner.com/public/graphql/v1'
 headers:
   X-Hasura-Admin-Secret: gelsemium
   X-Hasura-Role: user
@@ -27,34 +30,43 @@ queries:
     #     - duration: 10s
     #       target: 1000
     # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
-  - name: Create-Customer
-    tools: [k6, autocannon]
-    # execution_strategy: REQUESTS_PER_SECOND
-    # rps: 20
-    # duration: 60s
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 10000
-    connections: 10
-    query: |
-      mutation CustomerMutation {
-        insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) {
-          updated_at
-          last_name
-          id
-          first_name
-          external_ref_list
-          created_at
-          date_of_birth
-        }
-      }
+  # - name: Create-Customer
+  #   tools: [k6, autocannon]
+  #   # execution_strategy: REQUESTS_PER_SECOND
+  #   # rps: 800
+  #   # duration: 60s
+  #   execution_strategy: FIXED_REQUEST_NUMBER
+  #   requests: 1000
+  #   connections: 10
+  #   query: |
+  #     mutation CustomerMutation {
+  #       insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) {
+  #         updated_at
+  #         last_name
+  #         id
+  #         first_name
+  #         external_ref_list
+  #         created_at
+  #         date_of_birth
+  #       }
+  #     }
   - name: QuickInsert-Customer
-    tools: [k6, autocannon]
+    tools: [k6]
     # execution_strategy: REQUESTS_PER_SECOND
-    # rps: 20
+    # rps: 600
     # duration: 60s
-    execution_strategy: FIXED_REQUEST_NUMBER
+    # execution_strategy: FIXED_REQUEST_NUMBER
     requests: 10000
-    connections: 10  # concurency 10 is optimal
+    connections: 25  # concurency 10 is optimal
+    execution_strategy: MULTI_STAGE
+    initial_rps: 50
+    stages:
+      - duration: 10s
+        target: 100
+      - duration: 10s
+        target: 200
+      - duration: 10s
+        target: 400
     query: |
       mutation InsertMutation {
         quickinsert_customer_one(object: {first_name: "test2", external_ref_list: ["text_external_ref2"], last_name: "cus"}) {
