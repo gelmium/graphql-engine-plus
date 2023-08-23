@@ -13,13 +13,16 @@ FROM base AS build-server
 # Mount the source code into the container Build the Go application 
 RUN --mount=type=cache,target=/go/pkg/mod/ \
     --mount=type=bind,target=. \
-    go build -o /bin/server ./main.go
-
+    go build -o /bin/server .
+RUN apk update && apk add -U --no-cache ca-certificates && update-ca-certificates
 
 FROM scratch AS server
+# Copy ssl CA certificates
+COPY --from=build-server /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Copy and set the ENTRYPOINT to the executable
 COPY --from=build-server /bin/server /bin/
 ENTRYPOINT ["/bin/server"]
-
+# Expose port 3000
+EXPOSE 3000
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:3000/health || exit 1

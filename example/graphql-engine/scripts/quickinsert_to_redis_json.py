@@ -42,8 +42,8 @@ async def main(request: web.Request, body, transport):
     object_data["external_ref_list"] = ",".join(object_data["external_ref_list"])
     # await r.hset(key, mapping=object_data)
     # send the payload to redis stream `audit:$schema.$table:insert` using XADD command
-    stream_key = f"audit:{payload['table']['schema']}.{payload['table']['name']}:insert"
-    await r.xadd(stream_key, object_data, maxlen=100)
+    stream_key = f"worker:{payload['table']['schema']}.{payload['table']['name']}:insert"
+    await r.xadd(stream_key, object_data, maxlen=100000)
 
     payload_input_object["created_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f")
     payload_input_object["updated_at"] = None

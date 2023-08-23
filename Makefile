@@ -32,7 +32,9 @@ run-migrate-hasura:
 run-graphql-benchmark:
 	docker run --rm --name graphql-bench --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
 run-redis-insight:
-	docker run --rm --name redisinsight -p 5000:8001 redislabs/redisinsight:latest
+	docker run --rm --name redisinsight -v redisinsight:/db -p 5001:8001 redislabs/redisinsight:latest
+run-hasura-console:
+	docker run --rm --name hasuraconsole -env-file ./env -p 8080:8000 hasura/graphql-engine:latest
 redis-del-all-data:
 	docker-compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
 	
@@ -53,6 +55,10 @@ clean:  ## clean up build artifacts
 	rm -rf ./dist ./build
 	rm -f .*.out *.out
 
+build.graphql-engine-plus:
+	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t graphql-engine-plus:latest ./src
 
 build.runner:
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner
+go.run.runner:
+	cd ./example/backend/runner/;go run .	

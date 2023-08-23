@@ -8,10 +8,10 @@ python3 server.py &
 graphql-engine serve --server-port 8881 &
 # start graphql-engine schema v2, if the env is set
 if [ -n "$HASURA_GRAPHQL_READ_REPLICA_URLS" ]; then
-    graphql-engine serve --server-port 8880 --database-url "$HASURA_GRAPHQL_READ_REPLICA_URLS" &
+    graphql-engine serve --enable-console false --server-port 8880 --database-url "$HASURA_GRAPHQL_READ_REPLICA_URLS" &
 fi
 if [ -n "$HASURA_GRAPHQL_METADATA_DATABASE_URL_V2" ]; then
-    graphql-engine serve --server-port 8882 --metadata-database-url "$HASURA_GRAPHQL_METADATA_DATABASE_URL_V2" &
+    graphql-engine serve --enable-console false --server-port 8882 --metadata-database-url "$HASURA_GRAPHQL_METADATA_DATABASE_URL_V2" &
 fi
 
 # start nginx
