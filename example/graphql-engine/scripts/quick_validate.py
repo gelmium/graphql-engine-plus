@@ -30,6 +30,6 @@ async def main(request: web.Request, body, transport):
         if await r.get(x_request_id):
             raise ValueError(f"x-request-id {x_request_id} is exist in redis cache")
         # set x-request-id to redis cache
-        await r.set(x_request_id, '1', 60*60*24)
+        await r.set(x_request_id, '1', 3600)
 
     body['payload'] = payload

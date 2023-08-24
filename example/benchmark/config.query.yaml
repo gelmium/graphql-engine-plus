@@ -12,52 +12,34 @@ headers:
 # This should be disabled for genuine benchmarks, and only used for debugging/visibility.
 debug: false
 queries:
-    # Name: Unique name for the query
-    # Tools: List of benchmarking tools to run: ['autocannon', 'k6', 'wrk2']
-    # Execution Strategy: the type of the benchmark to run. Options are: 
-    # REQUESTS_PER_SECOND: Fixed duration, fixed rps. Example parameters:
-    #   duration: 10s
-    #   rps: 500
-    # FIXED_REQUEST_NUMBER: Complete requests as fast as possible, no duration. Example parameters:
-    #   requests: 10000
-    # MAX_REQUESTS_IN_DURATION: Make as many requests as possible in duration. Example parameters:
-    #   duration: 10s
-    # MULTI_STAGE: (K6 only currently) Several stages of REQUESTS_PER_SECOND benchmark. Example parameters:
-    #   initial_rps: 0
-    #   stages:
-    #     - duration: 5s
-    #       target: 100
-    #     - duration: 10s
-    #       target: 1000
-    # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
-  # - name: Create-Customer
-  #   tools: [k6, autocannon]
-  #   # execution_strategy: REQUESTS_PER_SECOND
-  #   # rps: 800
-  #   # duration: 60s
-  #   execution_strategy: FIXED_REQUEST_NUMBER
+  # Name: Unique name for the query
+  # Tools: List of benchmarking tools to run: ['autocannon', 'k6', 'wrk2']
+  # Execution Strategy: the type of the benchmark to run. Options are:
+  # REQUESTS_PER_SECOND: Fixed duration, fixed rps. Example parameters:
+  #   duration: 10s
+  #   rps: 500
+  # FIXED_REQUEST_NUMBER: Complete requests as fast as possible, no duration. Example parameters:
   #   requests: 10000
-  #   connections: 40
-  #   query: |
-  #     mutation CustomerMutation {
-  #       insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) {
-  #         updated_at
-  #         last_name
-  #         id
-  #         first_name
-  #         external_ref_list
-  #         created_at
-  #         date_of_birth
-  #       }
-  #     }
-  - name: QuickInsert-Customer
-    tools: [k6]
+  # MAX_REQUESTS_IN_DURATION: Make as many requests as possible in duration. Example parameters:
+  #   duration: 10s
+  # MULTI_STAGE: (K6 only currently) Several stages of REQUESTS_PER_SECOND benchmark. Example parameters:
+  #   initial_rps: 0
+  #   stages:
+  #     - duration: 5s
+  #       target: 100
+  #     - duration: 10s
+  #       target: 1000
+  # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
+  - name: Create-Customer
+    # tools: [k6, autocannon]
     # execution_strategy: REQUESTS_PER_SECOND
-    # rps: 600
+    # rps: 800
     # duration: 60s
     # execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 100000
-    connections: 256  # concurency 10 is optimal
+    # requests: 10000
+    # connections: 40
+    tools: [k6]
+    connections: 256
     execution_strategy: MULTI_STAGE
     initial_rps: 40
     stages:
@@ -88,7 +70,59 @@ queries:
       - duration: 90s
         target: 2400
       - duration: 90s
-        target: 2800           
+        target: 2800
+    query: |
+      mutation CustomerMutation {
+        insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) {
+          updated_at
+          last_name
+          id
+          first_name
+          external_ref_list
+          created_at
+          date_of_birth
+        }
+      }
+  - name: QuickInsert-Customer
+    tools: [k6]
+    # execution_strategy: REQUESTS_PER_SECOND
+    # rps: 600
+    # duration: 60s
+    # execution_strategy: FIXED_REQUEST_NUMBER
+    # requests: 100000
+    # connections: 40
+    connections: 256
+    execution_strategy: MULTI_STAGE
+    initial_rps: 40
+    stages:
+      - duration: 10s
+        target: 60
+      - duration: 10s
+        target: 80
+      - duration: 20s
+        target: 100
+      - duration: 20s
+        target: 140
+      - duration: 30s
+        target: 220
+      - duration: 30s
+        target: 300
+      - duration: 40s
+        target: 500
+      - duration: 40s
+        target: 800
+      - duration: 50s
+        target: 1100
+      - duration: 50s
+        target: 1400
+      - duration: 60s
+        target: 1700
+      - duration: 60s
+        target: 2000
+      - duration: 90s
+        target: 2400
+      - duration: 90s
+        target: 2800
     query: |
       mutation InsertMutation {
         quickinsert_customer_one(object: {first_name: "test2", external_ref_list: ["text_external_ref2"], last_name: "cus"}) {
@@ -101,3 +135,21 @@ queries:
           updated_at
         }
       }
+  - name: List-Customer
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 50000
+    connections: 250
+    query: |
+      query MyQuery {
+        customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-08-25"}}) {
+          id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
+        }
+      }
+
