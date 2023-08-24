@@ -155,17 +155,28 @@ async def validate_json_code_handler(request: web.Request):
         text=json.dumps(result),
     )
 
+
 async def healthcheck_graphql_engine(request: web.Request):
     async with aiohttp.ClientSession() as session:
-        async with session.get('http://localhost:8881/healthz?strict=true') as resp:
-            # extract the response status code and body
+        try:
+            async with session.get("http://localhost:8881/healthz?strict=true") as resp:
+                # extract the response status code and body
+                return web.Response(
+                    status=resp.status,
+                    headers={
+                        "Content-type": "application/json",
+                    },
+                    text=json.dumps({"status": await resp.text()}),
+                )
+        except Exception as e:
             return web.Response(
-                status=resp.status,
+                status=500,
                 headers={
                     "Content-type": "application/json",
                 },
-                text=json.dumps({"status": await resp.text()}),
+                text=json.dumps({"status": f"Error: {e}"}),
             )
+
 
 async def get_app():
     # Create the HTTP server.
@@ -205,8 +216,20 @@ async def get_app():
     return app
 
 
+from aiohttp.abc import AbstractAccessLogger
+
+
+class AccessLogger(AbstractAccessLogger):
+    def log(self, request, response, time):
+        self.logger.info(
+            f'" {request.method.ljust(8)} {request.path}"  {response.status}  {time*1000:6f}ms'
+            f' ({response.body_length}) "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
+        )
+
+
 if __name__ == "__main__":
-    web.run_app(get_app(), port=8888)
+    # access_log='"%r" %s %Tf (%b) "%{Referer}i" "%{User-Agent}i"'
+    web.run_app(get_app(), port=8888, access_log_class=AccessLogger)
     # try to cancel any running async tasks
     for task in async_tasks:
         if not task.done():

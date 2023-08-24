@@ -37,4 +37,4 @@ COPY --from=build-server /bin/server /bin/
 ENTRYPOINT ["/bin/server"]
 
 # Add healthcheck
-HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:8000/public/graphql/health || exit 1
+HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:8000/public/graphql/health?all=y || exit 1

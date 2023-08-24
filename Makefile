@@ -62,3 +62,7 @@ build.runner:
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner
 go.run.runner:
 	cd ./example/backend/runner/;go run .	
+
+test.graphql-engine-plus:
+	# fire a curl request to graphql-engine-plus
+	curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1

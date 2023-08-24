@@ -43,30 +43,6 @@ func Setup() *fiber.App {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
-	// add a POST endpoint to forward request to an upstream url
-	app.Post("/v1/graphql", func(c *fiber.Ctx) error {
-		// fire a POST request to the upstream url using the same header and body from the original request
-		agent := fiber.Post("http://localhost:8880/v1/graphql")
-
-		// loop through the header and set the header from the original request
-		c.Request().Header.VisitAll(func(key, value []byte) {
-			agent.Request().Header.SetBytesKV(key, value)
-		})
-		// set the body from the original request
-		agent.Request().SetBody(c.Request().Body())
-		// send the request to the upstream url using Fiber Go
-		if err := agent.Parse(); err != nil {
-			panic(err)
-		}
-		code, body, errs := agent.Bytes()
-		if len(errs) > 0 {
-			panic(errs)
-		}
-
-		// return the response from the upstream url
-		return c.Status(code).Send(body)
-	})
-
 	return app
 }
 
