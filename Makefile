@@ -41,11 +41,12 @@ redis-del-all-data:
 build: $(shell find src -type f)  ## compile and build project
 	mkdir -p build && touch build
 
-LOCAL_DOCKER_IMG_REPO := gelmium/graphql-engine-plus
+LOCAL_DOCKER_IMG_REPO := graphql-engine-plus
 ARCH := amd64
 build.out: build  ## build project and output build artifact (docker image/lambda zip file)
 	# Run Build artifact such as: docker container image
-	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
+	make build.graphql-engine-plus
+	make build.graphql-engine-plus-nginx
 	touch build.out
 
 build.push: build.out  ## build project and push build artifact (docker image/lambda zip file) to registry
@@ -56,13 +57,16 @@ clean:  ## clean up build artifacts
 	rm -f .*.out *.out
 
 build.graphql-engine-plus:
-	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t graphql-engine-plus:latest ./src
-
-build.runner:
+	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
+build.graphql-engine-plus-nginx:
+	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):nginx-latest -f nginx.Dockerfile ./src
+build.example-runner:
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner
-go.run.runner:
+go.run.example-runner:
 	cd ./example/backend/runner/;go run .	
 
 test.graphql-engine-plus:
 	# fire a curl request to graphql-engine-plus
 	curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1
+	# fire a curl request to graphql-engine-plus readonly endpoint
+	curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1readonly	

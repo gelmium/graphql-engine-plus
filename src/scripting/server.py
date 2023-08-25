@@ -6,6 +6,7 @@ import os
 import traceback
 import aiohttp
 from aiohttp import web
+from aiohttp.abc import AbstractAccessLogger
 import json
 import asyncio
 import sys
@@ -182,18 +183,17 @@ async def get_app():
     # Create the HTTP server.
     app = web.Application()
     # init dependencies
-    redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
-    if redis_url:
-        app["redis_client"] = await redis.from_url(redis_url)
     redis_cluster_url = os.environ.get("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+    redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
     if redis_cluster_url:
         app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
-        if not redis_url or redis_url == redis_cluster_url:
-            app["redis_client"] = app["redis_cluster"]
+    if redis_url and redis_url != redis_cluster_url:
+        app["redis_client"] = await redis.from_url(redis_url)
 
     app["psql_client"] = await asyncpg.connect(
         dsn=os.environ["HASURA_GRAPHQL_DATABASE_URL"]
     )
+
     # add health check endpoint
     app.router.add_get("", healthcheck_graphql_engine)
     app.router.add_get("/health/engine", healthcheck_graphql_engine)
@@ -216,7 +216,17 @@ async def get_app():
     return app
 
 
-from aiohttp.abc import AbstractAccessLogger
+async def cleanup_server(app):
+    # close the redis connections
+    if app["redis_cluster"]:
+        print("Scripting server shutdown: Closing redis-cluster connection")
+        await app["redis_cluster"].close()
+    if app["redis_client"]:
+        print("Scripting server shutdown: Closing redis connection")
+        await app["redis_client"].close()
+    # close the psql connections
+    print("Scripting server shutdown: Closing psql connection")
+    await app["psql_client"].close()
 
 
 class AccessLogger(AbstractAccessLogger):
@@ -229,8 +239,10 @@ class AccessLogger(AbstractAccessLogger):
 
 if __name__ == "__main__":
     # access_log='"%r" %s %Tf (%b) "%{Referer}i" "%{User-Agent}i"'
-    web.run_app(get_app(), port=8888, access_log_class=AccessLogger)
+    web.run_app(get_app(), host="127.0.0.1", port=8888, access_log_class=AccessLogger)
     # try to cancel any running async tasks
     for task in async_tasks:
         if not task.done():
             task.cancel()
+    print("Scripting server is gracefully shutdown")
+    os.exit(0)
