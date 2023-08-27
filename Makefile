@@ -9,6 +9,7 @@ export
 install:  ## install project dependencies
 	# allow vscode to use python env in devcontainer to suggest 
 	pip install -r src/scripting/requirements.txt
+	# curl -L https://github.com/hasura/graphql-engine/raw/stable/cli/get.sh | bash
 	
 up:  ## run the project in local
 	make build.out ARCH=$(shell dpkg --print-architecture)
@@ -33,8 +34,6 @@ run-graphql-benchmark:
 	docker run --rm --name graphql-bench --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
 run-redis-insight:
 	docker run --rm --name redisinsight -v redisinsight:/db -p 5001:8001 redislabs/redisinsight:latest
-run-hasura-console:
-	docker run --rm --name hasuraconsole -env-file ./env -p 8080:8000 hasura/graphql-engine:latest
 redis-del-all-data:
 	docker-compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
 	
@@ -63,10 +62,11 @@ build.graphql-engine-plus-nginx:
 build.example-runner:
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner
 go.run.example-runner:
-	cd ./example/backend/runner/;go run .	
+	cd ./example/backend/runner/;go run .
+python.run.scripting-server:
+	cd ./src/scripting/;python3 server.py
 
 test.graphql-engine-plus:
 	# fire a curl request to graphql-engine-plus
 	curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1
-	# fire a curl request to graphql-engine-plus readonly endpoint
-	curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1readonly	
+	curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation MyMutation { quickinsert_customer_one(object: {first_name: \"test\", external_ref_list: []}) { id first_name created_at } } "}' http://localhost:8000/public/graphql/v1

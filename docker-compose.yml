@@ -16,6 +16,15 @@ services:
       timeout: 3s
     ports:
       - "5432:5432"
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=postgres@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=postgres
+    ports:
+      - "8002:80"
+    volumes:
+      - ./scripts/pgadmin_servers.json:/pgadmin4/servers.json
   redis:  # port 6379, 8001 -> Redis Insight UI
     image: redis/redis-stack:latest
     volumes:
@@ -41,15 +50,15 @@ services:
       - ./example/graphql-engine/scripts:/graphql-engine/scripts
     env_file:
       - ./.env
-  runner:
-    image: apprunner-example:latest
-    ports:
-      - "3000:3000"
-    depends_on:
-      redis:
-        condition: service_healthy
-    env_file:
-      - ./.env
+  # runner:
+  #   image: apprunner-example:latest
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #   env_file:
+  #     - ./.env
 volumes:
   db_data:
     driver: local

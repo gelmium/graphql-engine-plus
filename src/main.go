@@ -22,7 +22,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 	)
 	app.Use(logger.New(logger.Config{
 		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
-		TimeFormat: "2006/01/02 15:04:05.000000",
+		TimeFormat: "2006-01-02T15:04:05.000000",
 	}))
 	// get the HEALTH_CHECK_PATH from environment variable
 	var healthCheckPath = os.Getenv("HEALTH_CHECK_PATH")
@@ -122,7 +122,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 	})
 
 	// get the PATH from environment variable
-	var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_READONLY_PATH")
+	var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
 	// default to /public/graphql/v1readonly if the env is not set
 	if roPath == "" {
 		roPath = "/public/graphql/v1readonly"

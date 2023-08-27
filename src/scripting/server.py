@@ -1,7 +1,5 @@
 import logging
 import json
-from types import SimpleNamespace
-from gql.transport.aiohttp import AIOHTTPTransport
 import os
 import traceback
 import aiohttp
@@ -13,15 +11,15 @@ import sys
 import redis.asyncio as redis
 import asyncpg
 import time
+from gql_client import GqlAsyncClient
+import re
+from datetime import datetime
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
 async_tasks = []
 exec_cache = {}
-aio_http_transport = AIOHTTPTransport(
-    url="http://localhost:8881/v1/graphql",
-    headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
-)
+
 allow_unsafe_script_execution = bool(os.environ.get("ALLOW_UNSAFE_SCRIPT_EXECUTION"))
 
 
@@ -50,9 +48,7 @@ async def exec_script(request, body):
     # the script must define this function: `async def main(request, body, transport):`
     # so it can be executed here in curent context
     try:
-        task = asyncio.get_running_loop().create_task(
-            locals()["main"](request, body, aio_http_transport)
-        )
+        task = asyncio.get_running_loop().create_task(locals()["main"](request, body))
     except KeyError:
         if body.get("execurl") and not allow_unsafe_script_execution:
             raise Exception(
@@ -190,27 +186,54 @@ async def get_app():
     if redis_url and redis_url != redis_cluster_url:
         app["redis_client"] = await redis.from_url(redis_url)
 
+    app["graphql_client"] = GqlAsyncClient()
     app["psql_client"] = await asyncpg.connect(
         dsn=os.environ["HASURA_GRAPHQL_DATABASE_URL"]
     )
+    replica_db_url = os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS")
+    if replica_db_url:
+        # only use the first replica db url even if there are multiple
+        app["psql_readonly"] = await asyncpg.connect(dsn=replica_db_url.split(",")[0])
+    # remove sensitive env vars to avoid leaking to the eval scripts
+    for k in os.environ:
+        # TODO: may affect script that relied on HASURA settings configured as env vars
+        if re.match(r"^HASURA_GRAPHQL_.+$", k):
+            del os.environ[k]
 
     # add health check endpoint
     app.router.add_get("", healthcheck_graphql_engine)
     app.router.add_get("/health/engine", healthcheck_graphql_engine)
     app.router.add_get("/health", lambda x: web.Response(status=200, text="OK"))
     # add main scripting endpoint
+    app.router.add_post("/execute", execute_code_handler)
     app.router.add_post("/", execute_code_handler)
     app.router.add_post("", execute_code_handler)
     # add validate scripting endpoint
     app.router.add_post("/validate", validate_json_code_handler)
 
-    # Create the access logger.
-    logger = logging.getLogger("aiohttp.access")
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    # Create the access log handler for aiohttp
+    nullify_handler = logging.NullHandler()
+    if not os.getenv("DEBUG"):
+        # disable the gql.transport.aiohttp logger
+        lg = logging.getLogger("gql.transport.aiohttp")
+        lg.addHandler(nullify_handler)
+        lg.propagate = False
+
+    accesslog_handler = logging.StreamHandler(sys.stdout)
+    accesslog_handler.setFormatter(logging.Formatter("%(message)s"))
+    access_lg = logging.getLogger("aiohttp.access")
+    access_lg.addHandler(accesslog_handler)
+    access_lg.propagate = False
+
+    default_handler = logging.StreamHandler(sys.stdout)
+    default_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            # datefmt="%Y-%m-%dT%H:%M:%S.uuuuuu",
+        )
+    )
     logging.basicConfig(
-        handlers=[handler],
+        handlers=[default_handler],
         level=logging.DEBUG if os.getenv("DEBUG") else logging.INFO,
     )
     return app
@@ -230,9 +253,12 @@ async def cleanup_server(app):
 
 
 class AccessLogger(AbstractAccessLogger):
-    def log(self, request, response, time):
+    def log(self, request, response, response_time):
+        # start time of request in UNIX time %t
+        start_time = time.time() - response_time
         self.logger.info(
-            f'" {request.method.ljust(8)} {request.path}"  {response.status}  {time*1000:6f}ms'
+            f'{datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%S.%f")}'
+            f' " {request.method.ljust(8)} {request.path}"  {response.status}  {response_time*1000:6f}ms'
             f' ({response.body_length}) "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
         )
 
