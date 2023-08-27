@@ -62,20 +62,26 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 	if err != nil {
 		concurencyLevel = 10
 	}
+	// reading appRunnerHealthUrl from environment variable
+	// this endpoint act as a mean to trigger scaling up of App Runner service
 	appRunnerHealthUrl := os.Getenv("AWS_APP_RUNNER_HEALTH_ENDPOINT_URL")
-	// opt, err := redis.ParseURL("redis://localhost:6379/0")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// redisClient := redis.NewClient(opt)
+	var redisClient redis.UniversalClient
 	// reading clusterUrl from environment variable
 	clusterUrl := os.Getenv("REDIS_CLUSTER_URL")
-	clusterOpt, err := redis.ParseClusterURL(clusterUrl)
-	if err != nil {
-		panic(err)
+	if clusterUrl != "" {
+		clusterOpt, err := redis.ParseClusterURL(clusterUrl)
+		if err != nil {
+			panic(err)
+		}
+		clusterOpt.TLSConfig.InsecureSkipVerify = true
+		redisClient = redis.NewClusterClient(clusterOpt)
+	} else {
+		opt, err := redis.ParseURL(os.Getenv("REDIS_URL"))
+		if err != nil {
+			panic(err)
+		}
+		redisClient = redis.NewClient(opt)
 	}
-	clusterOpt.TLSConfig.InsecureSkipVerify = true
-	redisClient := redis.NewClusterClient(clusterOpt)
 	// ping redis server
 	err = redisClient.Ping(ctx).Err()
 	if err != nil {
@@ -94,16 +100,24 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 
 	uniqueID := xid.New().String()
 	log.Info("Consumer is ready: " + uniqueID)
+	lastPendingMsgCount := 0
 	// start main loop
 	for {
 		// check context for cancellation
 		select {
 		case <-ctx.Done():
 			log.Info("Context cancelled, delete consumer id from consumer group")
-			// delete consumer id from consumer group
-			err = redisClient.XGroupDelConsumer(context.Background(), stream, consumersGroup, uniqueID).Err()
-			if err != nil {
-				log.Error(err)
+			// first check if there is any pending message still belong to this consumer
+			if lastPendingMsgCount != 0 {
+				log.Warn("This consumer may have pending messages, it should be check and delete manually")
+			} else {
+				// delete consumer id from consumer group
+				err = redisClient.XGroupDelConsumer(context.Background(), stream, consumersGroup, uniqueID).Err()
+				if err != nil {
+					log.Error(err)
+				} else {
+					log.Info("Deleted from consumer group, consumer id: ", uniqueID)
+				}
 			}
 			// gracefully shutdown redis client
 			log.Info("Context cancelled, close redis client")
@@ -112,44 +126,75 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 			return
 		default:
 		}
+		messageList := make([]redis.XMessage, concurencyLevel+1)
+		msgCount := 0
+		// XAutoClaim message from the stream and process the pending message
+		// this allow us to retry any msg that has not been acked (pending msg)
+		xAutoClaimCmd := redisClient.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   stream,
+			Group:    consumersGroup,
+			Consumer: uniqueID,
+			MinIdle:  10 * time.Millisecond,
+			Start:    "-",
+			Count:    concurencyLevel,
+		})
+		if xAutoClaimCmd.Err() != nil {
+			log.Error(xAutoClaimCmd.Err())
+		}
+		// check if there is any message to process
+		pendingMsgList, _, err := xAutoClaimCmd.Result()
+		if err != nil {
+			log.Error(err)
+		}
+		lastPendingMsgCount = len(pendingMsgList)
+		if len(pendingMsgList) != 0 {
+			// add the message to messageList
+			for i := 0; i < len(pendingMsgList); i++ {
+				messageList[msgCount] = pendingMsgList[i]
+				msgCount++
+			}
+		}
 
 		entries, err := redisClient.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    consumersGroup,
 			Consumer: uniqueID,
 			Streams:  []string{stream, ">"},
-			Count:    concurencyLevel,                      // read up to n messages at a time
+			Count:    concurencyLevel - int64(msgCount),    // read up to n messages at a time
 			Block:    time.Duration(10 * time.Millisecond), // wait max 10ms each iteration
 			NoAck:    false,
 		}).Result()
 		if err != nil {
 			// check if "redis: nil" in error message
 			if strings.Contains(err.Error(), "redis: nil") {
-				// no new message, continue to next iteration
-				continue
+				// no new message, continue to process pending message if there is
+			} else {
+				log.Error(err)
 			}
-			// else log the error
-			log.Error(err)
+		} else {
+			// reading from entries[0] as we are only reading from one stream
+			// for reading multiple streams, we need to loop through entries
+			// entries[0].Stream == stream
+			for i := 0; i < len(entries[0].Messages); i++ {
+				messageList[msgCount] = entries[0].Messages[i]
+				msgCount++
+			}
 		}
-
-		// reading from entries[0] as we are only reading from one stream
-		// for reading multiple streams, we need to loop through entries
-		// create sync.WaitGroup
-		msgCount := len(entries[0].Messages)
+		// check if there is any message to process
 		if msgCount == 0 {
 			continue
 		}
 		var wg sync.WaitGroup
 		log.Info("Received msg: " + strconv.Itoa(msgCount))
 		for i := 0; i < msgCount; i++ {
-			messageID := entries[0].Messages[i].ID
-			messageData := entries[0].Messages[i].Values
+			messageID := messageList[i].ID
+			messageData := messageList[i].Values
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				// mark start time in epoch nanoseconds
 				startTime := time.Now().UnixNano()
 				// call handler
-				err := handleNewMessage(ctx, redisClient, entries[0].Stream, consumersGroup, messageID, messageData)
+				err := handleNewMessage(ctx, redisClient, stream, consumersGroup, messageID, messageData)
 				if err != nil {
 					log.Error(err)
 					// handle error such as retry ack
@@ -188,11 +233,10 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 			// wait for the response time from the channel
 			select {
 			case resTime := <-responseTime:
-				if preFireHealthReq {
-					// recalculate the average response time
-					avgTime = (avgTime*totalCount + resTime) / (totalCount + 1)
-					totalCount++
-				} else {
+				// recalculate the average response time
+				avgTime = (avgTime*totalCount + resTime) / (totalCount + 1)
+				totalCount++
+				if !preFireHealthReq {
 					// post fire health request using the exact response time
 					go func() {
 						// fire GET request to app runner health url using fiber.GET
@@ -246,11 +290,17 @@ func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, st
 	// convert external_ref_list to []string by spliting the string with "," as delimiter
 	customer.ExternalRefList = strings.Split(messageData["external_ref_list"].(string), ",")
 	customer.FirstName = messageData["first_name"].(string)
-	customer.LastName = messageData["last_name"].(string)
+	// check if last_name is present in the messageData
+	_, ok := messageData["last_name"]
+	if ok {
+		customer.LastName = messageData["last_name"].(string)
+	} else {
+		customer.LastName = ""
+	}
 	// convert messageData["created_at"] string to int
 	customer.CreatedAt, _ = strconv.Atoi(messageData["created_at"].(string))
 	// check if updated_at is present in the messageData
-	_, ok := messageData["updated_at"]
+	_, ok = messageData["updated_at"]
 	if ok {
 		customer.UpdatedAt, _ = strconv.Atoi(messageData["updated_at"].(string))
 	} else {
@@ -263,6 +313,75 @@ func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, st
 		log.Error("Error saving customer.id=%s: %s\n", customer.Id, err)
 		return err
 	}
+	// send request to lambda function url
+	// payload := []map[string]interface{}{
+	// 	{
+	// 		"ticker":    "AAPL",
+	// 		"price":     300.00,
+	// 		"timestamp": 1640995200000,
+	// 	},
+	// 	{
+	// 		"ticker":    "GOOG",
+	// 		"price":     200.00,
+	// 		"timestamp": 1640995200000,
+	// 	},
+	// 	{
+	// 		"ticker":    "META",
+	// 		"price":     100.00,
+	// 		"timestamp": 1640995200000,
+	// 	},
+	// }
+	// // randomly add data to above payload up to 15000 records
+	// // lambda has a limitation of 6MB payload and 6MB reponse size
+	// // with timestamp is increased by 1 day each row and price is randomly increased by 0,10
+	// for i := 0; i < 15000; i++ {
+	// 	payload = append(payload, map[string]interface{}{
+	// 		"ticker":    "AAPL",
+	// 		"price":     payload[i*3]["price"].(float64) - 4 + rand.Float64()*10,
+	// 		"timestamp": 1640995200000 + (i+1)*86400000,
+	// 	})
+	// 	payload = append(payload, map[string]interface{}{
+	// 		"ticker":    "GOOG",
+	// 		"price":     payload[i*3+1]["price"].(float64) - 2 + rand.Float64()*5,
+	// 		"timestamp": 1640995200000 + (i+1)*86400000,
+	// 	})
+	// 	payload = append(payload, map[string]interface{}{
+	// 		"ticker":    "META",
+	// 		"price":     payload[i*3+2]["price"].(float64) - 0.5 + rand.Float64()*2,
+	// 		"timestamp": 1640995200000 + (i+1)*86400000,
+	// 	})
+	// }
+	// appLambdaUrl := os.Getenv("APP_LAMBDA_URL")
+	// data := map[string]interface{}{
+	// 	"payload": payload,
+	// }
+	// jsonData, err := json.Marshal(data)
+	// if err != nil {
+	// 	log.Error(err)
+	// 	return err
+	// }
+	// body := string(jsonData)
+	// agent := fiber.Post(appLambdaUrl)
+	// agent.Add("Content-Type", "application/json")
+	// agent.BodyString(body)
+	// if err := agent.Parse(); err != nil {
+	// 	log.Error(err)
+	// 	return err
+	// }
+	// code, bytes, errs := agent.Bytes()
+	// if len(errs) > 0 {
+	// 	log.Error(errs)
+	// 	return errs[0]
+	// }
+	// if code != 200 {
+	// 	log.Error("Non 2xx Error: ", string(bytes))
+	// 	return errors.New("Non 2xx Error when calling lambda function")
+	// }
+	// // convert to json
+	// var responseJson map[string]interface{}
+	// err = json.Unmarshal(bytes, &responseJson)
+	// log.Info(responseJson["ticker_avg_price"])
+	// ack the message
 	return redisClient.XAck(ctx, streamName, consumersGroupName, messageID).Err()
 }
 

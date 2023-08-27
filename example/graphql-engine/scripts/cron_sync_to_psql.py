@@ -2,7 +2,7 @@ from aiohttp import web
 
 # do not import here, must import in main() function
 
-async def main(request: web.Request, body, transport):
+async def main(request: web.Request, body):
     import re
     import uuid
     from datetime import datetime

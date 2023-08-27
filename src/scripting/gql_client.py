@@ -1,5 +1,5 @@
 import os
-from gql.transport.aiohttp import AIOHTTPTransport
+from gql.transport.aiohttp import AIOHTTPTransport, TransportAlreadyConnected
 from graphql import DocumentNode, ExecutionResult
 from gql import Client
 from typing import Any, AsyncGenerator, Dict, Optional, Literal, Union
@@ -11,30 +11,41 @@ server_port = os.environ.get("ENGINE_PLUS_SERVER_PORT", "8000")
 go_graphql_ropath = os.environ.get(
     "ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH", "/public/graphql/v1readonly"
 )
-v1_http_transport = AIOHTTPTransport(
+get_v1_http_transport = lambda: AIOHTTPTransport(
     url=f"http://localhost:8881/v1/graphql",
     headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
 )
-v2_http_transport = AIOHTTPTransport(
+get_v2_http_transport = lambda: AIOHTTPTransport(
     url=f"http://localhost:8882/v1/graphql",
     headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
 )
-ro_http_transport = AIOHTTPTransport(
+get_ro_http_transport = lambda: AIOHTTPTransport(
     url=f"http://localhost:8880/v1/graphql",
     headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
 )
-go_http_transport = AIOHTTPTransport(
+get_go_http_transport = lambda: AIOHTTPTransport(
     url=f"http://{server_host}:{server_port}{go_graphql_ropath}",
     headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
 )
 
 
 class GqlAsyncClient:
+    timeout = 60
+    max_retries = 3
+
     def __init__(self):
-        self._client = Client(transport=v1_http_transport, execute_timeout=60)
-        self._client_v2 = Client(transport=v2_http_transport, execute_timeout=60)
-        self._client_ro = Client(transport=ro_http_transport, execute_timeout=60)
-        self._client_go = Client(transport=go_http_transport, execute_timeout=60)
+        self._client = Client(
+            transport=get_v1_http_transport(), execute_timeout=self.timeout
+        )
+        self._client_v2 = Client(
+            transport=get_v2_http_transport(), execute_timeout=self.timeout
+        )
+        self._client_ro = Client(
+            transport=get_ro_http_transport(), execute_timeout=self.timeout
+        )
+        self._client_go = Client(
+            transport=get_go_http_transport(), execute_timeout=self.timeout
+        )
 
     async def validate(self, document: DocumentNode):
         if self._client.schema is None:
@@ -60,16 +71,22 @@ class GqlAsyncClient:
         get_execution_result: bool = False,
         **kwargs,
     ) -> Union[Dict[str, Any], ExecutionResult]:
-        async with self._client as gql_client:
-            return await gql_client.execute(
-                document,
-                variable_values=variable_values,
-                operation_name=operation_name,
-                serialize_variables=serialize_variables,
-                parse_result=parse_result,
-                get_execution_result=get_execution_result,
-                **kwargs,
-            )
+        for i in range(self.max_retries):
+            try:
+                async with self._client as gql_client:
+                    return await gql_client.execute(
+                        document,
+                        variable_values=variable_values,
+                        operation_name=operation_name,
+                        serialize_variables=serialize_variables,
+                        parse_result=parse_result,
+                        get_execution_result=get_execution_result,
+                        **kwargs,
+                    )
+            except TransportAlreadyConnected:
+                self._client = Client(
+                    transport=get_v1_http_transport(), execute_timeout=self.timeout
+                )
 
     async def execute_v2(
         self,
@@ -81,16 +98,22 @@ class GqlAsyncClient:
         get_execution_result: bool = False,
         **kwargs,
     ) -> Union[Dict[str, Any], ExecutionResult]:
-        async with self._client_v2 as gql_client:
-            return await gql_client.execute(
-                document,
-                variable_values=variable_values,
-                operation_name=operation_name,
-                serialize_variables=serialize_variables,
-                parse_result=parse_result,
-                get_execution_result=get_execution_result,
-                **kwargs,
-            )
+        for i in range(self.max_retries):
+            try:
+                async with self._client_v2 as gql_client:
+                    return await gql_client.execute(
+                        document,
+                        variable_values=variable_values,
+                        operation_name=operation_name,
+                        serialize_variables=serialize_variables,
+                        parse_result=parse_result,
+                        get_execution_result=get_execution_result,
+                        **kwargs,
+                    )
+            except TransportAlreadyConnected:
+                self._client_v2 = Client(
+                    transport=get_v2_http_transport(), execute_timeout=self.timeout
+                )
 
     async def subscribe(
         self,
@@ -149,16 +172,22 @@ class GqlAsyncClient:
         get_execution_result: bool = False,
         **kwargs,
     ) -> Union[Dict[str, Any], ExecutionResult]:
-        async with self._client_go as gql_client:
-            return await gql_client.execute(
-                document,
-                variable_values=variable_values,
-                operation_name=operation_name,
-                serialize_variables=serialize_variables,
-                parse_result=parse_result,
-                get_execution_result=get_execution_result,
-                **kwargs,
-            )
+        for i in range(self.max_retries):
+            try:
+                async with self._client_go as gql_client:
+                    return await gql_client.execute(
+                        document,
+                        variable_values=variable_values,
+                        operation_name=operation_name,
+                        serialize_variables=serialize_variables,
+                        parse_result=parse_result,
+                        get_execution_result=get_execution_result,
+                        **kwargs,
+                    )
+            except TransportAlreadyConnected:
+                self._client_go = Client(
+                    transport=get_go_http_transport(), execute_timeout=self.timeout
+                )
 
     async def subscribe_v1_replica(
         self,

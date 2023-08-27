@@ -25,7 +25,10 @@ async def main(request: web.Request, body):
                 )
 
     # require redis client to be initialized in the server.py
-    r = request.app["redis_client"]
+    try:
+        r = request.app["redis_cluster"]
+    except KeyError:
+        r = request.app["redis_client"]
     # clone the object json data in payload
     payload_input_object = payload["input"]["object"]
     payload_input_object["id"] = str(uuid.uuid4())
@@ -71,9 +74,5 @@ query MyQuery {
 
 """
     )
-    import asyncio
-
-    await asyncio.gather(
-        graphql_client.execute(mutation_query, variable_values={}),
-        graphql_client.execute_v1_query_with_cache(gql_query, variable_values={}),
-    )
+    await graphql_client.execute(mutation_query, variable_values={})
+    # await graphql_client.execute_v1_query_with_cache(gql_query, variable_values={})

@@ -8,6 +8,7 @@ report.html
 report.json
 # add ignore rules for python
 *.py[cod]
+__pycache__/
 # add ignore rules for golang
 *.exe
 *.o

@@ -2,14 +2,16 @@ from aiohttp import web
 
 # do not import here, must import in main() function
 
-async def main(request: web.Request, body, transport):
+
+async def main(request: web.Request, body):
     import json
     from datetime import datetime
+
     # required params from body
     # 10000 entries size is approx 10MB
-    params = body['params']
-    payload = body['payload']
-    STREAM_MAX_LEN = params['STREAM_MAX_LEN']
+    params = body["params"]
+    payload = body["payload"]
+    STREAM_MAX_LEN = params["STREAM_MAX_LEN"]
 
     def convert_timestamp_fields_of_object_to_epoch(object_data):
         # scan the object_data for timestamp string fields and convert them to epoch
@@ -18,13 +20,12 @@ async def main(request: web.Request, body, transport):
                 object_data[key] = int(
                     datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f").timestamp() * 1000
                 )
+
     # require redis client to be initialized in the server.py
     r = request.app["redis_client"]
     async with r.pipeline(transaction=True) as pipe:
         # send the payload to redis stream `audit:$schema:$table` using XADD command
-        stream_id = (
-            f"audit:{payload['table']['schema']}.{payload['table']['name']}"
-        )
+        stream_id = f"audit:{payload['table']['schema']}.{payload['table']['name']}"
         await pipe.xadd(
             stream_id,
             {
