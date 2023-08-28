@@ -1,7 +1,8 @@
+import base64
+import gzip
 import json
 import pandas
 import time
-
 
 def ping(request, body):
     body["payload"] = {"message": "pong"}
@@ -50,24 +51,62 @@ def main(request, body):
 
 # AWS Lambda Function Handler
 def lambda_handler(event, context):
-    start_time = time.time()
-    # read the event body
+    # process the event
     # print(f"event: {event}")
     # print(f"context: {context}")
-    if event["headers"].get("content-type") == "application/json":
-        body = json.loads(event["body"])
+
+    # check if content-encoding is gzip
+    if event["headers"].get("content-encoding") == "gzip":
+        if event.get("isBase64Encoded"):
+            # convert event["body"] from base64 string to bytes
+            body = gzip.decompress(base64.b64decode(event["body"]))
+        else:
+            body = gzip.decompress(event["body"])
     else:
         body = event["body"]
+    
+    # mark the start time of the request handler
+    # content-type decoding is included
+    start_time = time.time()
+    
+    # check if content-type is json
+    if event["headers"].get("content-type") == "application/json":
+        body = json.loads(body)
     # route the request to the corresponding function
     if event.get("rawPath") == "/ping":
         status = ping(event, body)
     else:
         status = main(event, body)
+    response_body = json.dumps(body["payload"])
+    # calculate the execution time of the request handler
+    # content-type encoding is included
+    execution_time = time.time() - start_time
+    headers = {
+        "Content-Type": "application/json",
+        "X-Execution-Time": f"{execution_time}",  # in seconds, not include encoding time
+    }
+    # print an access log for this request
+    try:
+        print(
+            f"{event['requestContext']['time']} \" {event['requestContext']['http']['method'].ljust(8)} {event['rawPath']}\"  {status} {execution_time:.6f}s {event['requestContext']['http'].get('sourceIp','-')}"
+        )
+    except KeyError:
+        pass
+    isBase64Encoded = False
+    # check if client accept gzip
+    if event["headers"].get("accept-encoding") == "gzip":
+        # compress the response body by convert it to bytes then gzip
+        # the binary body must be base64 encoded to be accepted by API Gateway/Function URL
+        response_body = base64.b64encode(
+            gzip.compress(response_body.encode("utf-8", errors="ignore"))
+        )
+        isBase64Encoded = True
+        # set content-encoding to gzip
+        headers.update({"Content-Encoding": "gzip"})
+    headers.update({})
     return {
         "statusCode": status,
-        "headers": {
-            "Content-Type": "application/json",
-            "X-Execution-Time": f"{time.time() - start_time}",
-        },
-        "body": json.dumps(body["payload"]),
+        "headers": headers,
+        "body": response_body,
+        "isBase64Encoded": isBase64Encoded,
     }
