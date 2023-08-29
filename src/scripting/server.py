@@ -232,6 +232,9 @@ async def get_app():
             # datefmt="%Y-%m-%dT%H:%M:%S.uuuuuu",
         )
     )
+    default_handler.setLevel(
+        logging.DEBUG if bool(os.getenv("DEBUG")) else logging.INFO
+    )
     logging.basicConfig(
         handlers=[default_handler],
         level=logging.DEBUG if os.getenv("DEBUG") else logging.INFO,

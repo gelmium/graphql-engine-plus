@@ -3,16 +3,15 @@ package main
 // import fiber library
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/xid"
 )
@@ -27,8 +26,9 @@ func Setup() *fiber.App {
 		},
 	)
 	app.Use(logger.New(logger.Config{
-		Format:     "${time} \"${method} ${path}\" ${status} ${latency} ${ip}\n",
-		TimeFormat: "2006/01/02 15:04:05.000000",
+		Format:       "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
+		TimeFormat:   "2006-01-02T15:04:05.000000",
+		TimeInterval: 10 * time.Millisecond,
 	}))
 	app.Get("/health", func(c *fiber.Ctx) error {
 		// read GET parameter from sleep from url localhost:3000/health?sleep=30
@@ -37,8 +37,8 @@ func Setup() *fiber.App {
 		sleepDuration, err := strconv.ParseInt(sleep, 10, 64)
 		// sleep for the given time, sleepDuration is in microseconds
 		if err == nil && sleepDuration > 0 {
-			// sleep max 120 seconds
-			time.Sleep(time.Duration(min(sleepDuration, 120_000_000)) * time.Microsecond)
+			// sleep max 110 seconds, as App Runner will always timeout after 120 seconds
+			time.Sleep(time.Duration(min(sleepDuration, 110_000_000)) * time.Microsecond)
 		}
 		return c.SendStatus(fiber.StatusOK)
 	})
@@ -56,11 +56,12 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 		preFireHealthReq = false
 	}
 	// create a channel of int64
-	responseTime := make(chan int64)
+	responseTimeChan := make(chan int64)
 	// worker configuration
-	concurencyLevel, err := strconv.ParseInt(os.Getenv("CONCURRENCY_LEVEL"), 10, 64)
+	concurencyLevel := 10
+	parseInt, err := strconv.ParseInt(os.Getenv("CONCURRENCY_LEVEL"), 10, 0)
 	if err != nil {
-		concurencyLevel = 10
+		concurencyLevel = int(parseInt)
 	}
 	// reading appRunnerHealthUrl from environment variable
 	// this endpoint act as a mean to trigger scaling up of App Runner service
@@ -87,7 +88,17 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 	if err != nil {
 		panic(err)
 	}
-	log.Info("Connected to Redis server")
+	if clusterUrl != "" {
+		log.Info("Connected to Redis Cluster Server")
+	} else {
+		log.Info("Connected to Redis Server")
+	}
+	// create a new postgresql connection pool
+	postgresClient, err := pgxpool.New(context.Background(), os.Getenv("POSTGRES_DATABASE_URL"))
+	if err != nil {
+		panic(err)
+	}
+	log.Info("Connected to Postgres Database")
 
 	stream := "worker:public.customer:insert"
 	consumersGroup := "test-go-consumer-group"
@@ -99,140 +110,16 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 	}
 
 	uniqueID := xid.New().String()
-	log.Info("Consumer is ready: " + uniqueID)
-	lastPendingMsgCount := 0
-	// start main loop
-	for {
-		// check context for cancellation
-		select {
-		case <-ctx.Done():
-			log.Info("Context cancelled, delete consumer id from consumer group")
-			// first check if there is any pending message still belong to this consumer
-			if lastPendingMsgCount != 0 {
-				log.Warn("This consumer may have pending messages, it should be check and delete manually")
-			} else {
-				// delete consumer id from consumer group
-				err = redisClient.XGroupDelConsumer(context.Background(), stream, consumersGroup, uniqueID).Err()
-				if err != nil {
-					log.Error(err)
-				} else {
-					log.Info("Deleted from consumer group, consumer id: ", uniqueID)
-				}
-			}
-			// gracefully shutdown redis client
-			log.Info("Context cancelled, close redis client")
-			gshutdownChanel <- redisClient.Close()
-			close(gshutdownChanel)
-			return
-		default:
-		}
-		messageList := make([]redis.XMessage, concurencyLevel+1)
-		msgCount := 0
-		// XAutoClaim message from the stream and process the pending message
-		// this allow us to retry any msg that has not been acked (pending msg)
-		xAutoClaimCmd := redisClient.XAutoClaim(ctx, &redis.XAutoClaimArgs{
-			Stream:   stream,
-			Group:    consumersGroup,
-			Consumer: uniqueID,
-			MinIdle:  10 * time.Millisecond,
-			Start:    "-",
-			Count:    concurencyLevel,
-		})
-		if xAutoClaimCmd.Err() != nil {
-			log.Error(xAutoClaimCmd.Err())
-		}
-		// check if there is any message to process
-		pendingMsgList, _, err := xAutoClaimCmd.Result()
-		if err != nil {
-			log.Error(err)
-		}
-		lastPendingMsgCount = len(pendingMsgList)
-		if len(pendingMsgList) != 0 {
-			// add the message to messageList
-			for i := 0; i < len(pendingMsgList); i++ {
-				messageList[msgCount] = pendingMsgList[i]
-				msgCount++
-			}
-		}
-
-		entries, err := redisClient.XReadGroup(ctx, &redis.XReadGroupArgs{
-			Group:    consumersGroup,
-			Consumer: uniqueID,
-			Streams:  []string{stream, ">"},
-			Count:    concurencyLevel - int64(msgCount),    // read up to n messages at a time
-			Block:    time.Duration(10 * time.Millisecond), // wait max 10ms each iteration
-			NoAck:    false,
-		}).Result()
-		if err != nil {
-			// check if "redis: nil" in error message
-			if strings.Contains(err.Error(), "redis: nil") {
-				// no new message, continue to process pending message if there is
-			} else {
-				log.Error(err)
-			}
-		} else {
-			// reading from entries[0] as we are only reading from one stream
-			// for reading multiple streams, we need to loop through entries
-			// entries[0].Stream == stream
-			for i := 0; i < len(entries[0].Messages); i++ {
-				messageList[msgCount] = entries[0].Messages[i]
-				msgCount++
-			}
-		}
-		// check if there is any message to process
-		if msgCount == 0 {
-			continue
-		}
-		var wg sync.WaitGroup
-		log.Info("Received msg: " + strconv.Itoa(msgCount))
-		for i := 0; i < msgCount; i++ {
-			messageID := messageList[i].ID
-			messageData := messageList[i].Values
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				// mark start time in epoch nanoseconds
-				startTime := time.Now().UnixNano()
-				// call handler
-				err := handleNewMessage(ctx, redisClient, stream, consumersGroup, messageID, messageData)
-				if err != nil {
-					log.Error(err)
-					// handle error such as retry ack
-					// or send to dead letter queue
-				}
-				// send the total time taken to process the message to the channel
-				responseTime <- time.Now().UnixNano() - startTime
-			}()
-		}
-		// use app runner health url to simulate request latency to AWS App Runner service
-		// we fire the request first using avgTime as the sleep time
-		// before waiting for the goroutines to finish
-
-		if preFireHealthReq {
-			for i := 0; i < msgCount; i++ {
-				go func() {
-					// fire GET request to app runner health url using fiber.GET
-					agent := fiber.Get(appRunnerHealthUrl)
-					// set Get QueryString
-					// sleep parameter is in microseconds
-					// convert avgTime from nanoseconds to microseconds
-					agent.QueryString("sleep=" + strconv.FormatInt(avgTime/1000, 10))
-					// send the request to the upstream url using Fiber Go
-					if err := agent.Parse(); err != nil {
-						log.Error(err)
-					}
-					_, _, errs := agent.Bytes()
-					if len(errs) > 0 {
-						log.Error(errs)
-					}
-				}()
-			}
-		}
-		// wait for the response time from the channel
-		for i := 0; i < msgCount; i++ {
-			// wait for the response time from the channel
+	redisMsgChan := SetupMessageHandler(ctx, concurencyLevel, redisClient, postgresClient, responseTimeChan)
+	// create a goroutine to handle the response time come from the MessageHandler
+	go func() {
+		for {
 			select {
-			case resTime := <-responseTime:
+			case <-ctx.Done():
+				// if ctx is cancelled, exit the goroutine
+				return
+			// wait for the response time from the channel
+			case resTime := <-responseTimeChan:
 				// recalculate the average response time
 				avgTime = (avgTime*totalCount + resTime) / (totalCount + 1)
 				totalCount++
@@ -252,38 +139,154 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 					}()
 				}
 				break
-			case <-time.After(30 * time.Second):
-				log.Error("Timed out waiting for response time metric")
-				// reset the response time to 1ms
-				avgTime = 1_000_000
-				totalCount = 1
-				break
 			}
 		}
-		// wait for all handleNewMessage goroutines to finish (to be sure that all messages are processed)
-		// other gorooutines such as the one that fire request to app runner health url will continue to run
-		wg.Wait()
-	}
-	// end main loop
-}
+	}()
+	log.Info("Consumer is ready: " + uniqueID)
+	lastPendingMsgCount := 0
+	// start main loop to receive message from redis
+	for {
+		// check context for cancellation
+		select {
+		case <-ctx.Done():
+			log.Info("Context cancelled, delete consumer id from consumer group")
+			// first check if there is any pending message still belong to this consumer
+			if lastPendingMsgCount != 0 {
+				log.Warn("This consumer may have pending messages, it should be check and delete manually")
+			} else {
+				// delete consumer id from consumer group
+				err = redisClient.XGroupDelConsumer(context.Background(), stream, consumersGroup, uniqueID).Err()
+				if err != nil {
+					log.Error(err)
+				} else {
+					log.Info("Deleted from consumer group, consumer id: ", uniqueID)
+				}
+			}
+			// gracefully shutdown postgres connection pool
+			log.Info("Context cancelled, close postgres client")
+			postgresClient.Close()
+			// gracefully shutdown redis client
+			log.Info("Context cancelled, close redis client")
+			gshutdownChanel <- redisClient.Close()
+			close(gshutdownChanel)
+			return
+		default:
+		}
+		var messageList []redis.XMessage
+		msgCount := 0
 
-type Customer struct {
-	Id              string   `json:"id"`
-	ExternalRefList []string `json:"external_ref_list"`
-	FirstName       string   `json:"first_name"`
-	LastName        string   `json:"last_name"`
-	CreatedAt       int      `json:"created_at"`
-	UpdatedAt       int      `json:"updated_at"`
-}
+		entries, err := redisClient.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    consumersGroup,
+			Consumer: uniqueID,
+			Streams:  []string{stream, ">"},
+			Count:    int64(concurencyLevel),               // read up to n messages at a time
+			Block:    time.Duration(10 * time.Millisecond), // wait max 10ms each iteration
+			NoAck:    false,
+		}).Result()
+		if err != nil {
+			// check if "redis: nil" in error message
+			if strings.Contains(err.Error(), "redis: nil") {
+				// no new message, continue to process pending message if there is
+			} else {
+				log.Error(err)
+			}
+		} else {
+			// reading from entries[0] as we are only reading from one stream
+			// for reading multiple streams, we need to loop through entries
+			// entries[0].Stream == stream
+			log.Debug(entries)
+			for i := 0; i < len(entries[0].Messages); i++ {
+				msg := entries[0].Messages[i]
+				if msg.ID != "" && len(msg.Values) > 0 {
+					messageList = append(messageList, msg)
+				}
+			}
+			msgCount = len(messageList)
+		}
+		// XAutoClaim message from the stream and process the pending message
+		// this allow us to retry any msg that has not been acked (pending msg)
+		// A safe MinIdle value is 60 seconds, this value must be greater than
+		// the time taken to process a message, or we risk duplicate message
+		xAutoClaimCmd := redisClient.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   stream,
+			Group:    consumersGroup,
+			Consumer: uniqueID,
+			MinIdle:  60 * time.Second,
+			Start:    "-",
+			Count:    int64(concurencyLevel - msgCount),
+		})
+		if xAutoClaimCmd.Err() != nil {
+			log.Error(xAutoClaimCmd.Err())
+		}
+		// check if there is any message to process
+		pendingMsgList, _, err := xAutoClaimCmd.Result()
+		if err != nil {
+			log.Error(err)
+		}
+		lastPendingMsgCount = len(pendingMsgList)
+		for i := 0; i < lastPendingMsgCount; i++ {
+			pendingMsg := pendingMsgList[i]
+			if pendingMsg.ID != "" && len(pendingMsg.Values) > 0 {
+				messageList = append(messageList, pendingMsg)
+			}
+		}
+		msgCount = len(messageList)
+		// check if there is any message to process
+		if msgCount == 0 {
+			continue
+		}
 
-func (i Customer) MarshalBinary() (data []byte, err error) {
-	bytes, err := json.Marshal(i)
-	return bytes, err
+		log.Info("Received msg count=" + strconv.Itoa(msgCount))
+		if lastPendingMsgCount > 0 {
+			log.Info("     pending count=" + strconv.Itoa(lastPendingMsgCount))
+		}
+		for i := 0; i < msgCount; i++ {
+			// send the redis message to the channel
+			redisMsgChan <- RedisStreamMessage{
+				MessageId:          messageList[i].ID,
+				MessageData:        messageList[i].Values,
+				StreamName:         stream,
+				ConsumersGroupName: consumersGroup,
+			}
+			// the chanel is buffered, so it will not block until max concurencyLevel is reached
+			// then it will block here until the message can be processed
+
+			// load simulation to AWS App Runner service
+			if preFireHealthReq {
+				// use app runner health url to simulate request latency to App Runner
+				// if preFire flag is set, fire the request first using avgTime as the sleep time
+				// otherwise, the request will be fired after the message is processed
+				go func() {
+					// fire GET request to app runner health url using fiber.GET
+					agent := fiber.Get(appRunnerHealthUrl)
+					// set Get QueryString
+					// sleep parameter is in microseconds
+					// convert avgTime from nanoseconds to microseconds
+					agent.QueryString("sleep=" + strconv.FormatInt(avgTime/1000, 10))
+					// send the request to the upstream url using Fiber Go
+					if err := agent.Parse(); err != nil {
+						log.Error(err)
+					}
+					_, _, errs := agent.Bytes()
+					if len(errs) > 0 {
+						log.Error(errs)
+					}
+				}()
+			} // end load simulation
+		} // end for loop enqueue message to channel
+	} // end main loop receive message from redis
 }
 
 func main() {
-
 	app := Setup()
+	// set log level to debug if DEBUG=true
+	debugFlag, err := strconv.ParseBool(os.Getenv("DEBUG"))
+	if err == nil && debugFlag {
+		log.DefaultLogger().SetLevel(log.LevelDebug)
+	} else {
+		log.DefaultLogger().SetLevel(log.LevelInfo)
+	}
+
 	workerCtx, cancelWorkerFn := context.WithCancel(context.Background())
 	// define a channel to wait for graceful shutdown
 	workkerGracefulShutdownChanel := make(chan error)

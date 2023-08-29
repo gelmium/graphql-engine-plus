@@ -53,26 +53,4 @@ async def main(request: web.Request, body):
     payload_input_object["created_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f")
     payload_input_object["updated_at"] = None
     body["payload"] = payload_input_object
-    graphql_client = request.app["graphql_client"]
-    from gql import gql
-
-    mutation_query = gql(
-        """
-        mutation CustomerMutation { insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) { id } }
-        """
-    )
-
-    gql_query = gql(
-        """
-query MyQuery {
-  customer_aggregate {
-    aggregate {
-      count
-    }
-  }
-}
-
-"""
-    )
-    await graphql_client.execute(mutation_query, variable_values={})
-    # await graphql_client.execute_v1_query_with_cache(gql_query, variable_values={})
+    return

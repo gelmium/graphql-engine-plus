@@ -1,3 +1,4 @@
 gql[aiohttp]
 redis
 asyncpg
+aioboto3
