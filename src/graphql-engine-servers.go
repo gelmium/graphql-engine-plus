@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -113,11 +114,11 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 		// fire GET request to app runner health url using fiber.GET
 		agent := fiber.Get("http://localhost:8888/health/engine")
 		if err := agent.Parse(); err != nil {
-			log.Error(err)
+			log.Warn(fmt.Sprintf("Startup wait engine servers: %v", err))
 		}
 		code, _, errs := agent.Bytes()
 		if len(errs) > 0 {
-			log.Error(errs)
+			log.Warn(fmt.Sprintf("Startup wait engine servers: %v", errs))
 		}
 		if code == 200 {
 			startupDoneFn()

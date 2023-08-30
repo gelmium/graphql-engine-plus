@@ -20,7 +20,7 @@ from datetime import datetime
 async_tasks = []
 exec_cache = {}
 
-allow_unsafe_script_execution = bool(os.environ.get("ALLOW_UNSAFE_SCRIPT_EXECUTION"))
+allow_unsafe_script_execution = bool(os.environ.get("ENGINE_PLUS_ALLOW_UNSAFE_SCRIPT_EXECUTION"))
 
 
 async def exec_script(request, body):
@@ -52,7 +52,7 @@ async def exec_script(request, body):
     except KeyError:
         if body.get("execurl") and not allow_unsafe_script_execution:
             raise Exception(
-                "To execute script from URL (execurl), must set ALLOW_UNSAFE_SCRIPT_EXECUTION=true"
+                "To execute script from URL (execurl), must set ENGINE_PLUS_ALLOW_UNSAFE_SCRIPT_EXECUTION=true"
             )
         else:
             raise Exception(
@@ -183,7 +183,7 @@ async def get_app():
     redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
     if redis_cluster_url:
         app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
-    if redis_url and redis_url != redis_cluster_url:
+    if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
 
     app["graphql_client"] = GqlAsyncClient()
@@ -194,11 +194,6 @@ async def get_app():
     if replica_db_url:
         # only use the first replica db url even if there are multiple
         app["psql_readonly"] = await asyncpg.connect(dsn=replica_db_url.split(",")[0])
-    # remove sensitive env vars to avoid leaking to the eval scripts
-    for k in os.environ:
-        # TODO: may affect script that relied on HASURA settings configured as env vars
-        if re.match(r"^HASURA_GRAPHQL_.+$", k):
-            del os.environ[k]
 
     # add health check endpoint
     app.router.add_get("", healthcheck_graphql_engine)
@@ -232,13 +227,15 @@ async def get_app():
             # datefmt="%Y-%m-%dT%H:%M:%S.uuuuuu",
         )
     )
-    default_handler.setLevel(
-        logging.DEBUG if bool(os.getenv("DEBUG")) else logging.INFO
-    )
+    app_log_level = logging.DEBUG if bool(os.getenv("DEBUG")) else logging.INFO
+    default_handler.setLevel(app_log_level)
     logging.basicConfig(
         handlers=[default_handler],
-        level=logging.DEBUG if os.getenv("DEBUG") else logging.INFO,
+        level=app_log_level,
     )
+    # set log level for boto logger to disable boto logs
+    for name in ["boto", "urllib3", "s3transfer", "boto3", "botocore", "aioboto3", "aiobotocore"]:
+        logging.getLogger(name).setLevel(logging.ERROR)
     return app
 
 

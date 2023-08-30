@@ -5,11 +5,9 @@ from aiohttp import web
 
 async def main(request: web.Request, body):
     from datetime import datetime
-    import uuid
-    import logging
+    import uuid, logging
 
     logger = logging.getLogger("quickinsert_to_redis_json.py")
-
     # required params from body
     payload = body["payload"]
     if "table" not in payload or "object" not in payload["input"]:

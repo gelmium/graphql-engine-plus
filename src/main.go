@@ -25,11 +25,11 @@ func Setup(startupCtx context.Context) *fiber.App {
 		},
 	)
 	app.Use(logger.New(logger.Config{
-		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
+		Format:     "${time} \"${method} ${path}\"${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
 	}))
 	// get the HEALTH_CHECK_PATH from environment variable
-	var healthCheckPath = os.Getenv("HEALTH_CHECK_PATH")
+	var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
 	// default to /public/graphql/health if the env is not set
 	if healthCheckPath == "" {
 		healthCheckPath = "/public/graphql/health"

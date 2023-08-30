@@ -58,7 +58,17 @@ func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, st
 	}
 	// save the customer to postgres
 	_, err := postgresClient.Exec(ctx,
-		"INSERT INTO public.customer (id, external_ref_list, first_name, last_name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
+		`INSERT INTO public.customer as EXISTING 
+			(id, external_ref_list, first_name, last_name, created_at, updated_at) 
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (id) DO 
+			UPDATE SET (external_ref_list, first_name, last_name, created_at, updated_at) = ($2, $3, $4, $5, $6)
+			WHERE 
+				EXISTING.id = $1 AND (
+					(EXCLUDED.created_at IS NOT NULL AND EXISTING.created_at IS NULL) OR 
+					(EXCLUDED.updated_at IS NOT NULL AND (EXISTING.updated_at IS NULL OR EXISTING.updated_at < EXCLUDED.updated_at))
+				)
+		;`,
 		customer.Id, customer.ExternalRefList, customer.FirstName, customer.LastName, customer.CreatedAt, customer.UpdatedAt)
 	if err != nil {
 		log.Error(fmt.Sprintf("Failed to save customer.id=%s to database\n", customer.Id))

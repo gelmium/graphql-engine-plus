@@ -8,24 +8,25 @@ server_host = os.environ.get("ENGINE_PLUS_SERVER_HOST", "localhost")
 server_port = os.environ.get("ENGINE_PLUS_SERVER_PORT", "8000")
 # graphql_v1path = os.environ.get("ENGINE_PLUS_GRAPHQL_V1_PATH", "/public/graphql/v1")
 # graphql_v2path = os.environ.get("ENGINE_PLUS_GRAPHQL_V2_PATH", "/public/graphql/v2")
+hasura_admin_secret = os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
 go_graphql_ropath = os.environ.get(
     "ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH", "/public/graphql/v1readonly"
 )
 get_v1_http_transport = lambda: AIOHTTPTransport(
     url=f"http://localhost:8881/v1/graphql",
-    headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
+    headers={"x-hasura-admin-secret": hasura_admin_secret},
 )
 get_v2_http_transport = lambda: AIOHTTPTransport(
     url=f"http://localhost:8882/v1/graphql",
-    headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
+    headers={"x-hasura-admin-secret": hasura_admin_secret},
 )
 get_ro_http_transport = lambda: AIOHTTPTransport(
     url=f"http://localhost:8880/v1/graphql",
-    headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
+    headers={"x-hasura-admin-secret": hasura_admin_secret},
 )
 get_go_http_transport = lambda: AIOHTTPTransport(
     url=f"http://{server_host}:{server_port}{go_graphql_ropath}",
-    headers={"x-hasura-admin-secret": os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]},
+    headers={"x-hasura-admin-secret": hasura_admin_secret},
 )
 
 
