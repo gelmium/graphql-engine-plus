@@ -258,7 +258,7 @@ class AccessLogger(AbstractAccessLogger):
         start_time = time.time() - response_time
         self.logger.info(
             f'{datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%S.%f")}'
-            f' " {request.method.ljust(8)} {request.path}"  {response.status}  {response_time*1000:6f}ms'
+            f' " {request.method.ljust(8)} {request.path}" {response.status}  {response_time*1000:6f}ms'
             f' ({response.body_length}) "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
         )
 

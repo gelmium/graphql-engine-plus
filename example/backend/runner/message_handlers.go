@@ -30,7 +30,7 @@ func (i Customer) MarshalBinary() (data []byte, err error) {
 }
 
 func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, streamName string, consumersGroupName string, messageID string, messageData map[string]interface{}, postgresClient *pgxpool.Pool) error {
-	log.Debug(fmt.Sprintf("Handling new messageID: %s data %s\n", messageID, messageData))
+	log.Info("Start handling messageID:", messageID)
 	// convert messageData to Customer struct
 	var customer Customer
 	customer.Id = messageData["id"].(string)
@@ -147,28 +147,31 @@ type RedisStreamMessage struct {
 func SetupMessageHandler(ctx context.Context, concurencyLevel int, redisClient redis.UniversalClient, postgresClient *pgxpool.Pool, responseTimeChan chan int64) chan RedisStreamMessage {
 	// create a channel for RedisStreamMessage
 	redisStreamMessageChan := make(chan RedisStreamMessage, concurencyLevel)
-	// create a goroutine to handle the message
-	go func() {
-		// create a for loop to keep reading from the channel
-		for {
-			select {
-			case <-ctx.Done():
-				// if ctx is cancelled, exit the goroutine
-				return
-			case redisStreamMessage := <-redisStreamMessageChan:
-				// mark start time in epoch nanoseconds
-				startTime := time.Now().UnixNano()
-				// call handleNewMessage function
-				err := handleNewMessage(ctx, redisClient, redisStreamMessage.StreamName, redisStreamMessage.ConsumersGroupName, redisStreamMessage.MessageId, redisStreamMessage.MessageData, postgresClient)
-				if err != nil {
-					log.Error(err)
-					// handle error such as retry ack
+	// create multiples goroutine to handle the message
+	// number of goroutine is equal to concurencyLevel
+	for i := 0; i < concurencyLevel; i++ {
+		go func() {
+			// create a for loop to keep reading from the channel
+			for {
+				select {
+				case <-ctx.Done():
+					// if ctx is cancelled, exit the goroutine
+					return
+				case redisStreamMessage := <-redisStreamMessageChan:
+					// mark start time in epoch nanoseconds
+					startTime := time.Now().UnixNano()
+					// call handleNewMessage function
+					err := handleNewMessage(ctx, redisClient, redisStreamMessage.StreamName, redisStreamMessage.ConsumersGroupName, redisStreamMessage.MessageId, redisStreamMessage.MessageData, postgresClient)
+					if err != nil {
+						log.Error(err)
+						// handle error such as retry ack
+					}
+					// send the total time taken to process the message to the channel
+					responseTimeChan <- time.Now().UnixNano() - startTime
 				}
-				// send the total time taken to process the message to the channel
-				responseTimeChan <- time.Now().UnixNano() - startTime
 			}
-		}
-	}()
+		}()
+	}
 	// return the channel
 	return redisStreamMessageChan
 }

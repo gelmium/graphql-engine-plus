@@ -34,18 +34,12 @@ async def main(request: web.Request, body):
     # set auto timestamp key to current epoch
     now = datetime.now()
     object_data["created_at"] = int(now.timestamp() * 1000)
-    # store the new record in redis JSON key=`$schema:$table:$id` using JSON.SET command
-    key = f"data:{payload['table']['schema']}.{payload['table']['name']}:{object_data['id']}"
-    # temp fix for redis cluster
-    # await r.json().set(key, "$", object_data)
-
-    # async redis cluster does not support json yet
     object_data["external_ref_list"] = ",".join(object_data["external_ref_list"])
-    # await r.hset(key, mapping=object_data)
     # send the payload to redis stream `audit:$schema.$table:insert` using XADD command
     stream_key = (
         f"worker:{payload['table']['schema']}.{payload['table']['name']}:insert"
     )
+    logger.info(f"Push object.id={object_data['id']} to stream: {stream_key}")
     await r.xadd(stream_key, object_data, maxlen=100000)
 
     payload_input_object["created_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f")

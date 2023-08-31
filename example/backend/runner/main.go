@@ -3,6 +3,7 @@ package main
 // import fiber library
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -26,7 +27,7 @@ func Setup() *fiber.App {
 		},
 	)
 	app.Use(logger.New(logger.Config{
-		Format:       "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
+		Format:       "${time} \"${method} ${path}\"${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat:   "2006-01-02T15:04:05.000000",
 		TimeInterval: 10 * time.Millisecond,
 	}))
@@ -47,7 +48,7 @@ func Setup() *fiber.App {
 }
 
 func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
-	var avgTime int64 = 1_000_000 // 1ms in nanoseconds unit
+	var avgTime int64 = 10_000_000 // 10ms in nanoseconds unit
 	var totalCount int64 = 1
 	// set this flag to True will tell the redis worker to
 	// fire health request before finish processing the message
@@ -59,9 +60,9 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 	responseTimeChan := make(chan int64)
 	// worker configuration
 	concurencyLevel := 10
-	parseInt, err := strconv.ParseInt(os.Getenv("CONCURRENCY_LEVEL"), 10, 0)
-	if err != nil {
-		concurencyLevel = int(parseInt)
+	_concurencyLevel, err := strconv.ParseInt(os.Getenv("CONCURRENCY_LEVEL"), 10, 0)
+	if err == nil {
+		concurencyLevel = int(_concurencyLevel)
 	}
 	// reading appRunnerHealthUrl from environment variable
 	// this endpoint act as a mean to trigger scaling up of App Runner service
@@ -142,7 +143,7 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 			}
 		}
 	}()
-	log.Info("Consumer is ready: " + uniqueID)
+	log.Info(fmt.Sprintf("Consumer Id=%s is ready with concurencyLevel=%d", uniqueID, concurencyLevel))
 	lastPendingMsgCount := 0
 	// start main loop to receive message from redis
 	for {
