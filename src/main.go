@@ -13,7 +13,7 @@ import (
 )
 
 // App Runner will always timeout after 120 seconds
-const GLOBAL_TIME_OUT = 110 * time.Second
+const UPSTREAM_TIME_OUT = 110 * time.Second
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
 func Setup(startupCtx context.Context) *fiber.App {
@@ -21,7 +21,8 @@ func Setup(startupCtx context.Context) *fiber.App {
 		fiber.Config{
 			ReadTimeout:  60 * time.Second,
 			WriteTimeout: 60 * time.Second,
-			ServerHeader: "Graphql Engine Plus",
+			ServerHeader: "graphql-engine-plus/v1.0.0",
+			Prefork:      false, // Prefork mode can't be enabled with sub process program running, also it doesn't give any performance boost if concurent request is low
 		},
 	)
 	app.Use(logger.New(logger.Config{
@@ -49,16 +50,16 @@ func Setup(startupCtx context.Context) *fiber.App {
 	})
 	// standard health check endpoint
 	app.Get("/health", func(c *fiber.Ctx) error {
-		// read GET parameter from sleep from url
+		// read GET parameter from sleep from url eg: localhost:3000/health?sleep=30
 		sleep := c.Query("sleep")
 		// ParseInt string sleep to int
 		sleepDuration, err := strconv.ParseInt(sleep, 10, 64)
 		// sleep for the given time, sleepDuration is in microseconds
 		if err == nil && sleepDuration > 0 {
-			// sleep max equal to GLOBAL_TIME_OUT
-			time.Sleep(time.Duration(min(sleepDuration, GLOBAL_TIME_OUT.Microseconds())) * time.Microsecond)
+			// sleep max 110 seconds, as App Runner will always timeout after 120 seconds
+			time.Sleep(time.Duration(min(sleepDuration, 110_000_000)) * time.Microsecond)
 		}
-		return c.Status(fiber.StatusOK).SendString("OK")
+		return c.SendStatus(fiber.StatusOK)
 	})
 	// get the PATH from environment variable
 	var v1Path = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
@@ -82,7 +83,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 		}
 		agent.Body(c.Body())
 		// set the timeout of proxy request
-		agent.Timeout(GLOBAL_TIME_OUT)
+		agent.Timeout(UPSTREAM_TIME_OUT)
 		// send the request to the upstream url using Fiber Go
 		if err := agent.Parse(); err != nil {
 			log.Error(err)
@@ -119,7 +120,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 		}
 		agent.Body(c.Body())
 		// set the timeout of proxy request
-		agent.Timeout(GLOBAL_TIME_OUT)
+		agent.Timeout(UPSTREAM_TIME_OUT)
 		// send the request to the upstream url using Fiber Go
 		if err := agent.Parse(); err != nil {
 			log.Error(err)
@@ -171,7 +172,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 		}
 		agent.Body(c.Body())
 		// set the timeout of proxy request
-		agent.Timeout(GLOBAL_TIME_OUT)
+		agent.Timeout(UPSTREAM_TIME_OUT)
 		// send the request to the upstream url using Fiber Go
 		if err := agent.Parse(); err != nil {
 			log.Error(err)
@@ -185,6 +186,52 @@ func Setup(startupCtx context.Context) *fiber.App {
 		// return the response from the upstream url
 		return c.Status(code).Send(body)
 	})
+
+	// get the PATH from environment variable
+	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
+	// this endpoint is optional and will only be available if the env is set
+	if execPath != "" {
+		// this endpoint expose the scripting server execute endpoint to public
+		// this allow client to by pass GraphQL engine and execute script directly
+		// be very careful when exposing this endpoint to public with
+		// env ENGINE_PLUS_ALLOW_UNSAFE_SCRIPT_EXECUTION set to true
+		app.Post(execPath, func(c *fiber.Ctx) error {
+			// validate the engine plus execute secret
+			headerHasuraAdminSecret := c.Get("X-Engine-Plus-Execute-Secret")
+			envHasuraAdminSecret := os.Getenv("ENGINE_PLUS_EXECUTE_SECRET")
+			// if header is empty or not equal to the env, return 401
+			if headerHasuraAdminSecret == "" || headerHasuraAdminSecret != envHasuraAdminSecret {
+				return fiber.NewError(fiber.StatusUnauthorized, "Unauthorized")
+			}
+			// check and wait for startupCtx to be done
+			if startupCtx.Err() == nil {
+				log.Warn("Waiting for startup to be completed")
+				// this wait can last for max 60s
+				<-startupCtx.Done()
+			}
+			// fire a POST request to the upstream url using the same header and body from the original request
+			agent := fiber.Post("http://localhost:8888/execute")
+			// loop through the header and set the header from the original request
+			for k, v := range c.GetReqHeaders() {
+				agent.Set(k, v)
+			}
+			agent.Body(c.Body())
+			// set the timeout of proxy request
+			agent.Timeout(UPSTREAM_TIME_OUT)
+			// send the request to the upstream url using Fiber Go
+			if err := agent.Parse(); err != nil {
+				log.Error(err)
+				return c.Status(500).SendString("Internal Server Error")
+			}
+			code, body, errs := agent.Bytes()
+			if len(errs) > 0 {
+				log.Error(errs)
+				return c.Status(500).SendString("Internal Server Error")
+			}
+			// return the response from the upstream url
+			return c.Status(code).Send(body)
+		})
+	}
 	return app
 }
 

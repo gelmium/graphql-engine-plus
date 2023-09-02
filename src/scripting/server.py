@@ -1,6 +1,7 @@
 import logging
 import json
 import os
+import random
 import traceback
 import aiohttp
 from aiohttp import web
@@ -12,7 +13,6 @@ import redis.asyncio as redis
 import asyncpg
 import time
 from gql_client import GqlAsyncClient
-import re
 from datetime import datetime
 
 # global variable to keep track of async tasks
@@ -20,10 +20,61 @@ from datetime import datetime
 async_tasks = []
 exec_cache = {}
 
-allow_unsafe_script_execution = bool(os.environ.get("ENGINE_PLUS_ALLOW_UNSAFE_SCRIPT_EXECUTION"))
+ENGINE_PLUS_EXECUTE_SECRET = os.environ.get("ENGINE_PLUS_EXECUTE_SECRET")
+logger = logging.getLogger("scripting-server")
 
-
-async def exec_script(request, body):
+async def exec_script(request: web.Request, body):
+    # remote execution via proxy
+    execproxy = body.get("execproxy")
+    if execproxy:
+        # remove the execproxy from body, to prevent infinite loop
+        del body["execproxy"]
+        # forward the request to execproxy
+        req_body = json.dumps(body)
+        req_headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "graphql-engine-plus/v1.0.0",
+        }
+        # loop through the request headers and copy to req_headers
+        disallowed_headers = set(list(req_headers.keys()) + ['Host', 'Content-Length', 'Accept-Encoding'])
+        for key, value in request.headers.items():
+            if key not in disallowed_headers:
+                req_headers[key] = value
+        async with aiohttp.ClientSession() as http_session:
+            max_retries = int(body.get("execproxy_429maxretry", 15))
+            for i in range(max_retries):
+                async with http_session.post(execproxy, data=req_body, headers=req_headers) as resp:
+                    text_body = await resp.text()
+                    # check if the response is 200
+                    if resp.status == 200:
+                        try:
+                            body["payload"] = json.loads(text_body)
+                        except json.decoder.JSONDecodeError:
+                            body["payload"] = text_body
+                        break
+                    elif resp.status == 429:
+                        # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
+                        # extract the "Retry-After" header
+                        retry_after = resp.headers.get('Retry-After')
+                        if retry_after:
+                            retry_after = min(float(retry_after), 29.0)
+                        else:
+                            retry_after = 0.1*i + random.random() * (3.0+0.3*i)
+                        logger.info(f"Rate limited by App Runner, retrying after {retry_after} seconds")
+                        # retry after advised/random seconds
+                        await asyncio.sleep(retry_after)
+                        continue
+                    else:
+                        logger.error(f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}")
+                        raise Exception(f"Error status={resp.status} in forwarding the request to {resp.url}")
+            else:
+                raise Exception(f"Max retries exceeded ({max_retries}) when forwarding the request to {execproxy}")
+        # the execution is forwarded to execproxy
+        # so we can return here, body["payload"] is set 
+        # with the result of execution from execproxy 
+        return
+    # local script execution
     execfile = body.get("execfile")
     if execfile:
         execfile_content = exec_cache.get(execfile)
@@ -33,31 +84,36 @@ async def exec_script(request, body):
             exec_cache[execfile] = execfile_content
         exec(execfile_content)
 
-    # The below functionality is required only if want to
-    # add/modify script on the fly without deployment
-    if allow_unsafe_script_execution:
+    # The `execurl` feature is required only if want to
+    # add new script/modify existing script on the fly without deployment
+    if ENGINE_PLUS_EXECUTE_SECRET:
+        # this is to increase security to prevent unauthorized script execution from URL
+        if request.headers.get("X-Engine-Plus-Execute-Secret") != ENGINE_PLUS_EXECUTE_SECRET:
+            raise Exception(
+                "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
+            )
         execurl = body.get("execurl")
         if execurl:
             execurl_content = exec_cache.get(execurl)
             if not execurl_content or body.get("execfresh"):
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(execurl) as resp:
+                async with aiohttp.ClientSession() as http_session:
+                    async with http_session.get(execurl, headers={'Cache-Control': 'no-cache'}) as resp:
                         execurl_content = await resp.text()
                 exec_cache[execurl] = execurl_content
             exec(execurl_content)
+    else:
+        if body.get("execurl"):
+            raise Exception(
+                "To execute script from URL (execurl), you must set a value for this environment: ENGINE_PLUS_EXECUTE_SECRET"
+            )
     # the script must define this function: `async def main(request, body, transport):`
     # so it can be executed here in curent context
     try:
         task = asyncio.get_running_loop().create_task(locals()["main"](request, body))
     except KeyError:
-        if body.get("execurl") and not allow_unsafe_script_execution:
-            raise Exception(
-                "To execute script from URL (execurl), must set ENGINE_PLUS_ALLOW_UNSAFE_SCRIPT_EXECUTION=true"
-            )
-        else:
-            raise Exception(
-                "The script must define this function: `async def main(request, body, transport):`"
-            )
+        raise Exception(
+            "The script must define this function: `async def main(request, body, transport):`"
+        )
     except TypeError:
         raise Exception(
             "The script must define this function: `async def main(request, body, transport):`"
@@ -93,7 +149,6 @@ async def execute_code_handler(request: web.Request):
             ),
             "traceback": str(traceback.format_exc()),
         }
-        logger = logging.getLogger("aiohttp.error")
         logger.error(result)
     # Return the result of the Python code execution.
     return web.Response(
@@ -136,7 +191,6 @@ async def validate_json_code_handler(request: web.Request):
             ),
             "traceback": str(traceback.format_exc()),
         }
-        logger = logging.getLogger("aiohttp.error")
         logger.error(result)
         if isinstance(e, ValueError):
             # for Validation Error, remove the error, traceback
@@ -154,9 +208,9 @@ async def validate_json_code_handler(request: web.Request):
 
 
 async def healthcheck_graphql_engine(request: web.Request):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession() as http_session:
         try:
-            async with session.get("http://localhost:8881/healthz?strict=true") as resp:
+            async with http_session.get("http://localhost:8881/healthz?strict=true") as resp:
                 # extract the response status code and body
                 return web.Response(
                     status=resp.status,

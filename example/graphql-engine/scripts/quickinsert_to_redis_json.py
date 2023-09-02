@@ -9,7 +9,9 @@ async def main(request: web.Request, body):
 
     logger = logging.getLogger("quickinsert_to_redis_json.py")
     # required params from body
+    params = body["params"]
     payload = body["payload"]
+    STREAM_MAX_LEN = params.get("STREAM_MAX_LEN", 100000)
     if "table" not in payload or "object" not in payload["input"]:
         # ignore this request
         return
@@ -40,8 +42,7 @@ async def main(request: web.Request, body):
         f"worker:{payload['table']['schema']}.{payload['table']['name']}:insert"
     )
     logger.info(f"Push object.id={object_data['id']} to stream: {stream_key}")
-    await r.xadd(stream_key, object_data, maxlen=100000)
-
+    await r.xadd(stream_key, object_data, maxlen=STREAM_MAX_LEN)
     payload_input_object["created_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f")
     payload_input_object["updated_at"] = None
     body["payload"] = payload_input_object
