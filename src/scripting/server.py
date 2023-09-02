@@ -14,6 +14,7 @@ import asyncpg
 import time
 from gql_client import GqlAsyncClient
 from datetime import datetime
+import uvloop
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
@@ -318,7 +319,7 @@ class AccessLogger(AbstractAccessLogger):
 
 
 if __name__ == "__main__":
-    # access_log='"%r" %s %Tf (%b) "%{Referer}i" "%{User-Agent}i"'
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     web.run_app(get_app(), host="127.0.0.1", port=8888, access_log_class=AccessLogger)
     # try to cancel any running async tasks
     for task in async_tasks:

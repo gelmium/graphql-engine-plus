@@ -1,3 +1,4 @@
+uvloop
 gql[aiohttp]
 redis
 asyncpg

@@ -4,7 +4,7 @@ from aiohttp import web
 
 
 async def main(request: web.Request, body):
-    import os, logging, time, json 
+    import os, logging, time, json
     from datetime import datetime
 
     logger = logging.getLogger("sync_to_dynamodb.py")
@@ -52,18 +52,19 @@ async def main(request: web.Request, body):
         queue_len = await r.lpush(sync_queue_name, json.dumps(object_data))
         # check if the queue is full and process it
         if queue_len >= BATCH_SIZE:
-            # setup async boto3 connection session
-            import aioboto3
-            session = aioboto3.Session()
-            async with session.resource(
-                "dynamodb", region_name=os.environ["AWS_DEFAULT_REGION"]
-            ) as dynamo_resource:
-                table = await dynamo_resource.Table(table_name)
-                async with table.batch_writer() as dynamo_writer:
-                    # pop a batch from the queue
-                    # and batch write it to dynamodb
-                    objects_batch = await r.rpop(sync_queue_name, BATCH_SIZE)
-                    if objects_batch:
+            # pop a batch from the queue
+            # and batch write it to dynamodb
+            objects_batch = await r.rpop(sync_queue_name, BATCH_SIZE)
+            if objects_batch:
+                # setup async boto3 connection session
+                import aioboto3
+
+                session = aioboto3.Session()
+                async with session.resource(
+                    "dynamodb", region_name=os.environ["AWS_DEFAULT_REGION"]
+                ) as dynamo_resource:
+                    table = await dynamo_resource.Table(table_name)
+                    async with table.batch_writer() as dynamo_writer:
                         for object_data_json_str in objects_batch:
                             object_data = json.loads(object_data_json_str)
                             logger.info(
@@ -84,18 +85,19 @@ async def main(request: web.Request, body):
         # check if the queue is full and process it
         if queue_len >= BATCH_SIZE:
             count = 0
-            # setup async boto3 connection session
-            import aioboto3
-            session = aioboto3.Session()
-            async with session.resource(
-                "dynamodb", region_name=os.environ["AWS_DEFAULT_REGION"]
-            ) as dynamo_resource:
-                table = await dynamo_resource.Table(table_name)
-                async with table.batch_writer() as dynamo_writer:
-                    # pop a batch from the queue
-                    # and batch write it to dynamodb
-                    objects_batch = await r.rpop(delete_queue_name, BATCH_SIZE)
-                    if objects_batch:
+            # pop a batch from the queue
+            # and batch write it to dynamodb
+            objects_batch = await r.rpop(delete_queue_name, BATCH_SIZE)
+            if objects_batch:
+                # setup async boto3 connection session
+                import aioboto3
+
+                session = aioboto3.Session()
+                async with session.resource(
+                    "dynamodb", region_name=os.environ["AWS_DEFAULT_REGION"]
+                ) as dynamo_resource:
+                    table = await dynamo_resource.Table(table_name)
+                    async with table.batch_writer() as dynamo_writer:
                         # deduplicate, dynamodb doesnt allow batch delete_item with duplicate keys
                         for object_key_json_sr in list(set(objects_batch)):
                             object_key = json.loads(object_key_json_sr)
