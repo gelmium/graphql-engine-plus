@@ -15,14 +15,20 @@ import time
 from gql_client import GqlAsyncClient
 from datetime import datetime
 import uvloop
+import aioboto3
+import contextlib
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
 async_tasks = []
+# global variable to cache the loaded execfile/execurl functions
 exec_cache = {}
+# global variable to cache the boto3 session
+boto3_session = aioboto3.Session()
 
 ENGINE_PLUS_EXECUTE_SECRET = os.environ.get("ENGINE_PLUS_EXECUTE_SECRET")
 logger = logging.getLogger("scripting-server")
+
 
 async def exec_script(request: web.Request, body):
     # remote execution via proxy
@@ -32,20 +38,24 @@ async def exec_script(request: web.Request, body):
         del body["execproxy"]
         # forward the request to execproxy
         req_body = json.dumps(body)
-        req_headers={
+        req_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
             "User-Agent": "graphql-engine-plus/v1.0.0",
         }
         # loop through the request headers and copy to req_headers
-        disallowed_headers = set(list(req_headers.keys()) + ['Host', 'Content-Length', 'Accept-Encoding'])
+        disallowed_headers = set(
+            list(req_headers.keys()) + ["Host", "Content-Length", "Accept-Encoding"]
+        )
         for key, value in request.headers.items():
             if key not in disallowed_headers:
                 req_headers[key] = value
         async with aiohttp.ClientSession() as http_session:
             max_retries = int(body.get("execproxy_429maxretry", 15))
             for i in range(max_retries):
-                async with http_session.post(execproxy, data=req_body, headers=req_headers) as resp:
+                async with http_session.post(
+                    execproxy, data=req_body, headers=req_headers
+                ) as resp:
                     text_body = await resp.text()
                     # check if the response is 200
                     if resp.status == 200:
@@ -57,51 +67,68 @@ async def exec_script(request: web.Request, body):
                     elif resp.status == 429:
                         # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
                         # extract the "Retry-After" header
-                        retry_after = resp.headers.get('Retry-After')
+                        retry_after = resp.headers.get("Retry-After")
                         if retry_after:
                             retry_after = min(float(retry_after), 29.0)
                         else:
-                            retry_after = 0.1*i + random.random() * (3.0+0.3*i)
-                        logger.info(f"Rate limited by App Runner, retrying after {retry_after} seconds")
+                            retry_after = 0.1 * i + random.random() * (3.0 + 0.3 * i)
+                        logger.info(
+                            f"Rate limited by App Runner, retrying after {retry_after} seconds"
+                        )
                         # retry after advised/random seconds
                         await asyncio.sleep(retry_after)
                         continue
                     else:
-                        logger.error(f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}")
-                        raise Exception(f"Error status={resp.status} in forwarding the request to {resp.url}")
+                        logger.error(
+                            f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}"
+                        )
+                        raise Exception(
+                            f"Error status={resp.status} in forwarding the request to {resp.url}"
+                        )
             else:
-                raise Exception(f"Max retries exceeded ({max_retries}) when forwarding the request to {execproxy}")
+                raise Exception(
+                    f"Max retries exceeded ({max_retries}) when forwarding the request to {execproxy}"
+                )
         # the execution is forwarded to execproxy
-        # so we can return here, body["payload"] is set 
-        # with the result of execution from execproxy 
+        # so we can return here, body["payload"] is set
+        # with the result of execution from execproxy
         return
     # local script execution
+    exec_main_func = None
     execfile = body.get("execfile")
     if execfile:
-        execfile_content = exec_cache.get(execfile)
-        if not execfile_content or body.get("execfresh"):
+        exec_main_func = exec_cache.get(execfile)
+        if not exec_main_func or body.get("execfresh"):
             with open(os.path.join("/graphql-engine/scripts", execfile), "r") as f:
-                execfile_content = f.read()
-            exec_cache[execfile] = execfile_content
-        exec(execfile_content)
+                exec(f.read())
+            try:
+                exec_main_func = exec_cache[execfile] = locals()["main"]
+            except KeyError:
+                raise Exception(
+                    "The script must define this function: `async def main(request, body):`"
+                )
 
     # The `execurl` feature is required only if want to
     # add new script/modify existing script on the fly without deployment
     if ENGINE_PLUS_EXECUTE_SECRET:
         # this is to increase security to prevent unauthorized script execution from URL
-        if request.headers.get("X-Engine-Plus-Execute-Secret") != ENGINE_PLUS_EXECUTE_SECRET:
+        if (
+            request.headers.get("X-Engine-Plus-Execute-Secret")
+            != ENGINE_PLUS_EXECUTE_SECRET
+        ):
             raise Exception(
                 "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
             )
         execurl = body.get("execurl")
         if execurl:
-            execurl_content = exec_cache.get(execurl)
-            if not execurl_content or body.get("execfresh"):
+            exec_main_func = exec_cache.get(execurl)
+            if not exec_main_func or body.get("execfresh"):
                 async with aiohttp.ClientSession() as http_session:
-                    async with http_session.get(execurl, headers={'Cache-Control': 'no-cache'}) as resp:
-                        execurl_content = await resp.text()
-                exec_cache[execurl] = execurl_content
-            exec(execurl_content)
+                    async with http_session.get(
+                        execurl, headers={"Cache-Control": "no-cache"}
+                    ) as resp:
+                        exec(await resp.text())
+                exec_main_func = exec_cache[execurl] = locals()["main"]
     else:
         if body.get("execurl"):
             raise Exception(
@@ -109,15 +136,15 @@ async def exec_script(request: web.Request, body):
             )
     # the script must define this function: `async def main(request, body, transport):`
     # so it can be executed here in curent context
-    try:
-        task = asyncio.get_running_loop().create_task(locals()["main"](request, body))
-    except KeyError:
+    if not exec_main_func:
         raise Exception(
-            "The script must define this function: `async def main(request, body, transport):`"
+            "At least one of these parameter must be specified: execfile, execurl"
         )
+    try:
+        task = asyncio.get_running_loop().create_task(exec_main_func(request, body))
     except TypeError:
         raise Exception(
-            "The script must define this function: `async def main(request, body, transport):`"
+            "The script must define this function: `async def main(request, body):`"
         )
     if getattr(body, "execasync", False):
         async_tasks.append(task)
@@ -129,7 +156,7 @@ async def exec_script(request: web.Request, body):
 async def execute_code_handler(request: web.Request):
     # And execute the Python code.
     # mark starting time
-    start_time = time.time()
+    request.start_time = time.time()
     try:
         # Get the Python code from the JSON request body
         body = json.loads(await request.text())
@@ -156,7 +183,7 @@ async def execute_code_handler(request: web.Request):
         status=status_code,
         headers={
             "Content-type": "application/json",
-            "X-Execution-Time": f"{time.time() - start_time}",
+            "X-Execution-Time": f"{time.time() - request.start_time}",
         },
         text=json.dumps(result),
     )
@@ -211,7 +238,9 @@ async def validate_json_code_handler(request: web.Request):
 async def healthcheck_graphql_engine(request: web.Request):
     async with aiohttp.ClientSession() as http_session:
         try:
-            async with http_session.get("http://localhost:8881/healthz?strict=true") as resp:
+            async with http_session.get(
+                "http://localhost:8881/healthz?strict=true"
+            ) as resp:
                 # extract the response status code and body
                 return web.Response(
                     status=resp.status,
@@ -249,6 +278,26 @@ async def get_app():
     if replica_db_url:
         # only use the first replica db url even if there are multiple
         app["psql_readonly"] = await asyncpg.connect(dsn=replica_db_url.split(",")[0])
+    # init boto3 session if enabled, this allow faster boto3 connection in scripts
+    ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
+    if ENGINE_PLUS_ENABLE_BOTO3:
+        init_resources = ENGINE_PLUS_ENABLE_BOTO3.split(",")
+        # TODO: add support for different region
+        context_stack = contextlib.AsyncExitStack()
+        app["boto3_context_stack"] = context_stack
+        app["boto3_session"] = boto3_session
+        if "dynamodb" in init_resources:
+            app["boto3_dynamodb"] = await context_stack.enter_async_context(
+                boto3_session.resource("dynamodb")
+            )
+        if "s3" in init_resources:
+            app["boto3_s3"] = await context_stack.enter_async_context(
+                boto3_session.resource("s3")
+            )
+        if "sqs" in init_resources:
+            app["boto3_sqs"] = await context_stack.enter_async_context(
+                boto3_session.resource("sqs")
+            )
 
     # add health check endpoint
     app.router.add_get("", healthcheck_graphql_engine)
@@ -260,6 +309,9 @@ async def get_app():
     app.router.add_post("", execute_code_handler)
     # add validate scripting endpoint
     app.router.add_post("/validate", validate_json_code_handler)
+
+    # register cleanup on shutdown
+    app.on_shutdown.append(cleanup_server)
 
     # Create the access log handler for aiohttp
     nullify_handler = logging.NullHandler()
@@ -289,31 +341,56 @@ async def get_app():
         level=app_log_level,
     )
     # set log level for boto logger to disable boto logs
-    for name in ["boto", "urllib3", "s3transfer", "boto3", "botocore", "aioboto3", "aiobotocore"]:
+    for name in [
+        "boto",
+        "urllib3",
+        "s3transfer",
+        "boto3",
+        "botocore",
+        "aioboto3",
+        "aiobotocore",
+    ]:
         logging.getLogger(name).setLevel(logging.ERROR)
     return app
 
 
 async def cleanup_server(app):
+    futures = []
     # close the redis connections
-    if app["redis_cluster"]:
+    redis_cluster = app.get("redis_cluster")
+    if redis_cluster:
         print("Scripting server shutdown: Closing redis-cluster connection")
-        await app["redis_cluster"].close()
-    if app["redis_client"]:
+        futures.append(redis_cluster.close())
+    redis_client = app.get("redis_client")
+    if redis_client:
         print("Scripting server shutdown: Closing redis connection")
-        await app["redis_client"].close()
+        futures.append(redis_client.close())
+    # close boto3 session
+    boto3_context_stack = app.get("boto3_context_stack")
+    if boto3_context_stack:
+        print("Scripting server shutdown: Closing boto3 session")
+        futures.append(boto3_context_stack.aclose())
     # close the psql connections
-    print("Scripting server shutdown: Closing psql connection")
-    await app["psql_client"].close()
+    psql_client = app.get("psql_client")
+    if psql_client:
+        print("Scripting server shutdown: Closing psql connection")
+        futures.append(psql_client.close())
+    # wait all futures
+    await asyncio.gather(*futures)
+    print("Scripting server shutdown: Finished")
 
 
 class AccessLogger(AbstractAccessLogger):
     def log(self, request, response, response_time):
+        latency = float(response.headers.get("X-Execution-Time", response_time))
         # start time of request in UNIX time %t
-        start_time = time.time() - response_time
+        try:
+            start_time = request.start_time
+        except AttributeError:
+            start_time = time.time() - latency
         self.logger.info(
             f'{datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%S.%f")}'
-            f' " {request.method.ljust(8)} {request.path}" {response.status}  {response_time*1000:6f}ms'
+            f' " {request.method.ljust(8)} {request.path}" {response.status}  {latency*1000:6f}ms'
             f' ({response.body_length}) "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
         )
 

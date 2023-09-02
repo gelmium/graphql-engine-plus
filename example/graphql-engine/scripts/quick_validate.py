@@ -13,7 +13,7 @@ async def main(request: web.Request, body):
     # loop in body.payload.data.input to check if first_name = last_name
     # if so, raise error
     for input in payload["data"]["input"]:
-        if input["first_name"] == input["last_name"]:
+        if input["first_name"] == input.get("last_name"):
             raise ValueError(
                 f"first_name {input['first_name']} is same as last_name {input['last_name']}"
             )

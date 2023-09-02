@@ -23,7 +23,7 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 	}
 }
 
-func SetRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
+func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
 	for k, v := range c.GetReqHeaders() {
 		// filter out the header that we don't want to forward
 		// such as: Accept-Encoding, Content-Length, Content-Type, X-Forwarded-For
@@ -36,9 +36,9 @@ func SetRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
 	agent.Add("X-Forwarded-For", c.IP())
 }
 
-func SendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
+func sendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
 	// loop through the header and set the header from the original request
-	SetRequestHeaderUpstream(c, agent)
+	setRequestHeaderUpstream(c, agent)
 	agent.Body(c.Body())
 	// set the timeout of proxy request
 	agent.Timeout(UPSTREAM_TIME_OUT)
@@ -62,7 +62,7 @@ func SendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
 }
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
-func Setup(startupCtx context.Context) *fiber.App {
+func setupFiber(startupCtx context.Context) *fiber.App {
 	app := fiber.New(
 		fiber.Config{
 			ReadTimeout:  60 * time.Second,
@@ -120,7 +120,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 		// fire a POST request to the upstream url using the same header and body from the original request
 		agent := fiber.Post("http://localhost:8881/v1/graphql")
 		// send request to upstream without caching
-		return SendRequestToUpstream(c, agent)
+		return sendRequestToUpstream(c, agent)
 	})
 
 	// get the PATH from environment variable
@@ -136,7 +136,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 		// fire a POST request to the upstream url using the same header and body from the original request
 		agent := fiber.Post("http://localhost:8882/v1/graphql")
 		// send request to upstream without caching
-		return SendRequestToUpstream(c, agent)
+		return sendRequestToUpstream(c, agent)
 	})
 
 	// get the PATH from environment variable
@@ -171,7 +171,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 		// fire a POST request to the upstream url using the same header and body from the original request
 		agent := fiber.Post("http://localhost:8880/v1/graphql")
 		// send request to upstream without caching
-		return SendRequestToUpstream(c, agent)
+		return sendRequestToUpstream(c, agent)
 	})
 
 	// get the PATH from environment variable
@@ -180,8 +180,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 	if execPath != "" {
 		// this endpoint expose the scripting server execute endpoint to public
 		// this allow client to by pass GraphQL engine and execute script directly
-		// be very careful when exposing this endpoint to public with
-		// env ENGINE_PLUS_ALLOW_UNSAFE_SCRIPT_EXECUTION set to true
+		// be careful when exposing this endpoint to public without a strong security measure
 		app.Post(execPath, func(c *fiber.Ctx) error {
 			// validate the engine plus execute secret
 			headerHasuraAdminSecret := c.Get("X-Engine-Plus-Execute-Secret")
@@ -195,7 +194,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 			// fire a POST request to the upstream url using the same header and body from the original request
 			agent := fiber.Post("http://localhost:8888/execute")
 			// send request to upstream without caching
-			return SendRequestToUpstream(c, agent)
+			return sendRequestToUpstream(c, agent)
 		})
 	}
 	return app
@@ -204,7 +203,7 @@ func Setup(startupCtx context.Context) *fiber.App {
 func main() {
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
-	app := Setup(startupCtx)
+	app := setupFiber(startupCtx)
 	// get the server Host:Port from environment variable
 	var serverHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")
 	// default to empty string if the env is not set
