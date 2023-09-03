@@ -14,14 +14,22 @@ import (
 type operation func(ctx context.Context) error
 
 // gracefulShutdown waits for termination syscalls and doing clean up operations after received it
-func GracefulShutdown(ctx context.Context, timeout time.Duration, ops map[string]operation) <-chan struct{} {
+func GracefulShutdown(triggerCtx context.Context, timeout time.Duration, ops map[string]operation) <-chan struct{} {
+	shutdownContext, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	wait := make(chan struct{})
 	go func() {
 		s := make(chan os.Signal, 1)
 
 		// add any other syscalls that you want to be notified with
 		signal.Notify(s, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		<-s
+		// wait from both triggerCtx.Done and syscall s chanel
+		select {
+		case <-triggerCtx.Done():
+			log.Println("graceful shutdown is triggered within process")
+		case signal := <-s:
+			log.Println("received shutdown signal from system", signal)
+		}
 
 		log.Println("Shutting down...")
 
@@ -44,7 +52,7 @@ func GracefulShutdown(ctx context.Context, timeout time.Duration, ops map[string
 				defer wg.Done()
 
 				log.Printf("cleaning up: %s", innerKey)
-				if err := innerOp(ctx); err != nil {
+				if err := innerOp(shutdownContext); err != nil {
 					log.Printf("%s: clean up failed: %s", innerKey, err.Error())
 					return
 				}

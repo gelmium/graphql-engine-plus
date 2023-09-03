@@ -136,13 +136,6 @@ func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, st
 	return redisClient.XAck(ctx, streamName, consumersGroupName, messageID).Err()
 }
 
-type RedisStreamMessage struct {
-	MessageId          string
-	MessageData        map[string]interface{}
-	StreamName         string
-	ConsumersGroupName string
-}
-
 // write a setup function to setup the handler for above message type using channel
 func SetupMessageHandler(ctx context.Context, concurencyLevel int, redisClient redis.UniversalClient, postgresClient *pgxpool.Pool, responseTimeChan chan int64) chan RedisStreamMessage {
 	// create a channel for RedisStreamMessage

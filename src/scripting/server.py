@@ -51,8 +51,8 @@ async def exec_script(request: web.Request, body):
             if key not in disallowed_headers:
                 req_headers[key] = value
         async with aiohttp.ClientSession() as http_session:
-            max_retries = int(body.get("execproxy_429maxretry", 15))
-            for i in range(max_retries):
+            max_retries = int(body.get("execproxy_max_retries", 15))
+            for i in range(1, max_retries + 1):
                 async with http_session.post(
                     execproxy, data=req_body, headers=req_headers
                 ) as resp:
@@ -75,6 +75,7 @@ async def exec_script(request: web.Request, body):
                         logger.info(
                             f"Rate limited by App Runner, retrying after {retry_after} seconds"
                         )
+                        body["status_code"] = 429
                         # retry after advised/random seconds
                         await asyncio.sleep(retry_after)
                         continue
@@ -82,6 +83,7 @@ async def exec_script(request: web.Request, body):
                         logger.error(
                             f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}"
                         )
+                        body["status_code"] = resp.status
                         raise Exception(
                             f"Error status={resp.status} in forwarding the request to {resp.url}"
                         )
@@ -166,10 +168,12 @@ async def execute_code_handler(request: web.Request):
         status_code = 200
         result = body["payload"]
     except Exception as e:
-        if isinstance(e, (SyntaxError, ValueError)):
-            status_code = 400
+        if isinstance(e, web.HTTPException):
+            raise e
+        elif isinstance(e, (SyntaxError, ValueError)):
+            status_code = body.get("status_code", 400)
         else:
-            status_code = 500
+            status_code = body.get("status_code", 500)
         result = {
             "error": str(e.__class__.__name__),
             "message": str(
@@ -208,10 +212,12 @@ async def validate_json_code_handler(request: web.Request):
         status_code = 200
         result = body["payload"]
     except Exception as e:
-        if isinstance(e, (SyntaxError, ValueError)):
-            status_code = 400
+        if isinstance(e, web.HTTPException):
+            raise e
+        elif isinstance(e, (SyntaxError, ValueError)):
+            status_code = body.get("status_code", 400)
         else:
-            status_code = 500
+            status_code = body.get("status_code", 500)
         result = {
             "error": str(e.__class__.__name__),
             "message": str(

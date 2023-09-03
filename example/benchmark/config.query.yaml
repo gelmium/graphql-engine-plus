@@ -2,7 +2,8 @@
 # url: 'http://localhost:8000/public/graphql/readonly/v1'
 # url: 'http://localhost:8881/v1/graphql'
 # url: 'http://localhost:3000/v1/graphql'
-url: 'https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
+# url: 'https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
+url: 'http://localhost:3000/proxy?url=https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
 headers:
   X-Hasura-Admin-Secret: gelsemium
   X-Hasura-Role: user
