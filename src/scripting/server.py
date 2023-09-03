@@ -409,4 +409,4 @@ if __name__ == "__main__":
         if not task.done():
             task.cancel()
     print("Scripting server is gracefully shutdown")
-    os.exit(0)
+    sys.exit(0)
