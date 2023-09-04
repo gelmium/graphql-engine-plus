@@ -63,6 +63,8 @@ build.example-runner:
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner
 go.run.example-runner:
 	cd ./example/backend/runner/;go run .
+go.run.proxy-benchmark:
+	cd ./example/benchmark/proxy/;go run .
 python.run.scripting-server:
 	cd ./src/scripting/;python3 server.py
 

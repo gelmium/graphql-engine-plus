@@ -38,7 +38,7 @@ queries:
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 200000
-    connections: 5000
+    connections: 4000
     tools: [k6]
     query: |
       mutation CustomerMutation {
@@ -59,7 +59,7 @@ queries:
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 200000
-    connections: 5000
+    connections: 4000
     query: |
       mutation InsertMutation {
         quickinsert_customer_one(object: {first_name: "test2", external_ref_list: ["text_external_ref2"], last_name: "cus"}) {
@@ -76,7 +76,7 @@ queries:
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 200000
-    connections: 5000
+    connections: 4000
     query: |
       query MyQuery {
         customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-08-25"}}) {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	gfshutdown "github.com/gelmium/graceful-shutdown"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -222,7 +223,7 @@ func main() {
 	// register engine-servers & http-server clean-up operations
 	// then wait for termination signal to do the clean-up
 	shutdownTimeout := 30 * time.Second
-	wait := GracefulShutdown(mainCtx, shutdownTimeout, map[string]operation{
+	wait := gfshutdown.GracefulShutdown(mainCtx, shutdownTimeout, map[string]gfshutdown.Operation{
 		"engine-servers": func(shutdownCtx context.Context) error {
 			startServerCtxCancelFn()
 			return <-serverShutdownErrorChanel
@@ -232,6 +233,6 @@ func main() {
 		},
 		// Add other cleanup operations here
 	})
-	<-wait
 	log.Info("GraphQL Engine Plus is shutdown")
+	os.Exit(<-wait)
 }
