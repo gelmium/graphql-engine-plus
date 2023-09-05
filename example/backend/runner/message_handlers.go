@@ -2,16 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/jackc/pgx/v5/pgxpool"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -19,42 +17,30 @@ type Customer struct {
 	Id              string    `json:"id"`
 	ExternalRefList []string  `json:"external_ref_list"`
 	FirstName       string    `json:"first_name"`
-	LastName        string    `json:"last_name"`
+	LastName        string    `json:"last_name,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	UpdatedAt       time.Time `json:"updated_at,omitempty"`
 }
 
-func (i Customer) MarshalBinary() (data []byte, err error) {
-	bytes, err := json.Marshal(i)
+func (c Customer) MarshalBinary() (data []byte, err error) {
+	bytes, err := jsoniter.Marshal(c)
 	return bytes, err
 }
 
 func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, streamName string, consumersGroupName string, messageID string, messageData map[string]interface{}, postgresClient *pgxpool.Pool) error {
 	log.Info("Start handling messageID:", messageID)
 	// convert messageData to Customer struct
+	var ConfigFastest = jsoniter.Config{
+		EscapeHTML:                    false,
+		MarshalFloatWith6Digits:       true,
+		ObjectFieldMustBeSimpleString: true,
+		TagKey:                        "json",
+	}.Froze()
 	var customer Customer
-	customer.Id = messageData["id"].(string)
-	// convert external_ref_list to []string by spliting the string with "," as delimiter
-	customer.ExternalRefList = strings.Split(messageData["external_ref_list"].(string), ",")
-	customer.FirstName = messageData["first_name"].(string)
-	// check if last_name is present in the messageData
-	_, ok := messageData["last_name"]
-	if ok {
-		customer.LastName = messageData["last_name"].(string)
-	} else {
-		customer.LastName = ""
-	}
-	// convert messageData["created_at"] string to int
-	createdAt, _ := strconv.Atoi(messageData["created_at"].(string))
-	// convert createdAt to time.Time, createdAt is in milliseconds
-	customer.CreatedAt = time.Unix(0, int64(createdAt)*int64(time.Millisecond))
-	// check if updated_at is present in the messageData
-	_, ok = messageData["updated_at"]
-	if ok {
-		updatedAt, _ := strconv.Atoi(messageData["updated_at"].(string))
-		customer.UpdatedAt = time.Unix(0, int64(updatedAt)*int64(time.Millisecond))
-	} else {
-		customer.UpdatedAt = customer.CreatedAt
+	ConfigFastest.UnmarshalFromString(messageData["payload"].(string), &customer)
+	if customer.UpdatedAt.IsZero() {
+		// set to now
+		customer.UpdatedAt = time.Now()
 	}
 	// save the customer to postgres
 	_, err := postgresClient.Exec(ctx,

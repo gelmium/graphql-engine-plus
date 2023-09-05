@@ -112,17 +112,17 @@ async def exec_script(request: web.Request, body):
 
     # The `execurl` feature is required only if want to
     # add new script/modify existing script on the fly without deployment
+    execurl = body.get("execurl")
     if ENGINE_PLUS_EXECUTE_SECRET:
-        # this is to increase security to prevent unauthorized script execution from URL
-        if (
-            request.headers.get("X-Engine-Plus-Execute-Secret")
-            != ENGINE_PLUS_EXECUTE_SECRET
-        ):
-            raise Exception(
-                "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
-            )
-        execurl = body.get("execurl")
         if execurl:
+            # this is to increase security to prevent unauthorized script execution from URL
+            if (
+                request.headers.get("X-Engine-Plus-Execute-Secret")
+                != ENGINE_PLUS_EXECUTE_SECRET
+            ):
+                raise Exception(
+                    "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
+                )
             exec_main_func = exec_cache.get(execurl)
             if not exec_main_func or body.get("execfresh"):
                 async with aiohttp.ClientSession() as http_session:
@@ -132,7 +132,7 @@ async def exec_script(request: web.Request, body):
                         exec(await resp.text())
                 exec_main_func = exec_cache[execurl] = locals()["main"]
     else:
-        if body.get("execurl"):
+        if execurl:
             raise Exception(
                 "To execute script from URL (execurl), you must set a value for this environment: ENGINE_PLUS_EXECUTE_SECRET"
             )
@@ -177,7 +177,7 @@ async def execute_code_handler(request: web.Request):
         result = {
             "error": str(e.__class__.__name__),
             "message": str(
-                getattr(e, "msg", e.args[0] if len(e.args) else "Unknown error")
+                getattr(e, "msg", e.args[0] if len(e.args) else e)
             ),
             "traceback": str(traceback.format_exc()),
         }
@@ -221,7 +221,7 @@ async def validate_json_code_handler(request: web.Request):
         result = {
             "error": str(e.__class__.__name__),
             "message": str(
-                getattr(e, "msg", e.args[0] if len(e.args) else "Unknown error")
+                getattr(e, "msg", e.args[0] if len(e.args) else e)
             ),
             "traceback": str(traceback.format_exc()),
         }

@@ -37,7 +37,7 @@ queries:
     # rps: 800
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 300000
     connections: 500
     tools: [k6]
     query: |
@@ -58,7 +58,7 @@ queries:
     # rps: 600
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 300000
     connections: 500
     query: |
       mutation InsertMutation {
@@ -75,11 +75,11 @@ queries:
   - name: List-Customer
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 400000
     connections: 500
     query: |
       query MyQuery {
-        customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-08-25"}}) {
+        customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
           id
           last_name
           external_ref_list
