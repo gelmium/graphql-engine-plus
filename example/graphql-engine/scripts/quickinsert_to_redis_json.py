@@ -5,7 +5,7 @@ from aiohttp import web
 
 async def main(request: web.Request, body):
     from datetime import datetime, timezone
-    import uuid, logging, json
+    import uuid, logging, msgspec
 
     logger = logging.getLogger("quickinsert_to_redis_json.py")
     # required params from body
@@ -36,7 +36,7 @@ async def main(request: web.Request, body):
     await r.xadd(
         stream_key,
         {
-            "payload": json.dumps(payload_input_object),
+            "payload": msgspec.json.encode(payload_input_object),
         },
         maxlen=STREAM_MAX_LEN,
     )

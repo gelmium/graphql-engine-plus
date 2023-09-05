@@ -62,6 +62,7 @@ build.graphql-engine-plus:
 build.graphql-engine-plus-nginx:
 	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):nginx-latest -f nginx.Dockerfile ./src
 build.example-runner:
+	cd ./example/backend/runner/;go mod tidy
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner
 go.run.example-runner:
 	cd ./example/backend/runner/;go run .

@@ -37,7 +37,7 @@ queries:
     # rps: 800
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 300000
+    requests: 200000
     connections: 500
     tools: [k6]
     query: |
@@ -58,7 +58,7 @@ queries:
     # rps: 600
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 300000
+    requests: 200000
     connections: 500
     query: |
       mutation InsertMutation {
@@ -75,7 +75,7 @@ queries:
   - name: List-Customer
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 400000
+    requests: 200000
     connections: 500
     query: |
       query MyQuery {
@@ -89,4 +89,14 @@ queries:
           updated_at
         }
       }
-
+  - name: Create-Customer-Failed-Validation
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 200000
+    connections: 500
+    tools: [k6]
+    query: |
+      mutation CustomerMutation {
+        insert_customer_one(object: {gender: 9, first_name: "test", external_ref_list: ["text_external_ref"], last_name: "test"}) {
+          id
+        }
+      }

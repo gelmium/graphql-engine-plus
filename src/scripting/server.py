@@ -1,12 +1,10 @@
 import logging
-import json
 import os
 import random
 import traceback
 import aiohttp
 from aiohttp import web
 from aiohttp.abc import AbstractAccessLogger
-import json
 import asyncio
 import sys
 import redis.asyncio as redis
@@ -17,6 +15,7 @@ from datetime import datetime
 import uvloop
 import aioboto3
 import contextlib
+import msgspec
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
@@ -28,6 +27,9 @@ boto3_session = aioboto3.Session()
 
 ENGINE_PLUS_EXECUTE_SECRET = os.environ.get("ENGINE_PLUS_EXECUTE_SECRET")
 logger = logging.getLogger("scripting-server")
+# Pre create json encoder/decoder for server to reuse for every request
+json_encoder = msgspec.json.Encoder()
+json_decoder = msgspec.json.Decoder()
 
 
 async def exec_script(request: web.Request, body):
@@ -37,7 +39,7 @@ async def exec_script(request: web.Request, body):
         # remove the execproxy from body, to prevent infinite loop
         del body["execproxy"]
         # forward the request to execproxy
-        req_body = json.dumps(body)
+        req_body = str(json_encoder.encode(body))
         req_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -60,8 +62,8 @@ async def exec_script(request: web.Request, body):
                     # check if the response is 200
                     if resp.status == 200:
                         try:
-                            body["payload"] = json.loads(text_body)
-                        except json.decoder.JSONDecodeError:
+                            body["payload"] = json_decoder.decode(text_body)
+                        except msgspec.DecodeError:
                             body["payload"] = text_body
                         break
                     elif resp.status == 429:
@@ -161,7 +163,8 @@ async def execute_code_handler(request: web.Request):
     request.start_time = time.time()
     try:
         # Get the Python code from the JSON request body
-        body = json.loads(await request.text())
+        body = {}
+        body = json_decoder.decode(await request.text())
         ### execute the python script in the body
         await exec_script(request, body)
         ### the script can modify the body['payload'] to transform the return data
@@ -176,9 +179,7 @@ async def execute_code_handler(request: web.Request):
             status_code = body.get("status_code", 500)
         result = {
             "error": str(e.__class__.__name__),
-            "message": str(
-                getattr(e, "msg", e.args[0] if len(e.args) else e)
-            ),
+            "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
             "traceback": str(traceback.format_exc()),
         }
         logger.error(result)
@@ -189,8 +190,25 @@ async def execute_code_handler(request: web.Request):
             "Content-type": "application/json",
             "X-Execution-Time": f"{time.time() - request.start_time}",
         },
-        text=json.dumps(result),
+        body=json_encoder.encode(result),
     )
+
+
+from typing import Any, Dict, List
+
+
+class ValidationData(msgspec.Struct):
+    input: List[Dict[str, Any]]
+
+
+class ValidatePayload(msgspec.Struct):
+    data: ValidationData
+    role: str
+    session_variables: Dict[str, str]
+    version: int
+
+
+validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
 
 
 async def validate_json_code_handler(request: web.Request):
@@ -200,8 +218,15 @@ async def validate_json_code_handler(request: web.Request):
         # get the request GET params
         params = dict(request.query)
         # Get the Python code from the params and assign to body
-        payload = json.loads(await request.text())
-        body = {"payload": payload}
+        payload = validate_json_decoder.decode(await request.text())
+        body = {
+            "payload": payload.data.input,
+            "session": {
+                "role": payload.role,
+                "session_variables": payload.session_variables,
+                "version": payload.version,
+            },
+        }
         body["execfile"] = params.get("execfile")
         body["execurl"] = params.get("execurl")
         body["execasync"] = params.get("execasync")
@@ -212,24 +237,16 @@ async def validate_json_code_handler(request: web.Request):
         status_code = 200
         result = body["payload"]
     except Exception as e:
+        status_code = 400
         if isinstance(e, web.HTTPException):
             raise e
-        elif isinstance(e, (SyntaxError, ValueError)):
-            status_code = body.get("status_code", 400)
+        elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
+            pass
         else:
-            status_code = body.get("status_code", 500)
+            logger.error(e)
         result = {
-            "error": str(e.__class__.__name__),
-            "message": str(
-                getattr(e, "msg", e.args[0] if len(e.args) else e)
-            ),
-            "traceback": str(traceback.format_exc()),
+            "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
         }
-        logger.error(result)
-        if isinstance(e, ValueError):
-            # for Validation Error, remove the error, traceback
-            del result["error"]
-            del result["traceback"]
     # Return the result of the Python code execution.
     return web.Response(
         status=status_code,
@@ -237,7 +254,7 @@ async def validate_json_code_handler(request: web.Request):
             "Content-type": "application/json",
             "X-Execution-Time": f"{time.time() - start_time}",
         },
-        text=json.dumps(result),
+        body=json_encoder.encode(result),
     )
 
 
@@ -253,7 +270,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                     headers={
                         "Content-type": "application/json",
                     },
-                    text=json.dumps({"status": await resp.text()}),
+                    body=json_encoder.encode({"status": await resp.text()}),
                 )
         except Exception as e:
             return web.Response(
@@ -261,7 +278,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                 headers={
                     "Content-type": "application/json",
                 },
-                text=json.dumps({"status": f"Error: {e}"}),
+                body=json_encoder.encode({"status": f"Error: {e}"}),
             )
 
 

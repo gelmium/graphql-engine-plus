@@ -36,6 +36,10 @@ func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, st
 		ObjectFieldMustBeSimpleString: true,
 		TagKey:                        "json",
 	}.Froze()
+	if messageData["payload"] == nil {
+		// ignore the old msg format, just ack the message
+		return redisClient.XAck(ctx, streamName, consumersGroupName, messageID).Err()
+	}
 	var customer Customer
 	ConfigFastest.UnmarshalFromString(messageData["payload"].(string), &customer)
 	if customer.UpdatedAt.IsZero() {
