@@ -1,8 +1,5 @@
-# url: 'http://localhost:8000/public/graphql/v1'
-# url: 'http://localhost:8000/public/graphql/readonly/v1'
-# url: 'http://localhost:8881/v1/graphql'
-url: 'https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
-#url: 'http://localhost:3000/proxy?url=https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
+# url: 'http://localhost:8000/public/graphql/v1readonly'
+url: 'https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1readonly'
 headers:
   X-Hasura-Admin-Secret: gelsemium
   X-Hasura-Role: user
@@ -31,51 +28,10 @@ queries:
   #     - duration: 10s
   #       target: 1000
   # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
-  - name: Create-Customer
-    # tools: [k6, autocannon]
-    # execution_strategy: REQUESTS_PER_SECOND
-    # rps: 800
-    # duration: 60s
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
-    connections: 500
-    tools: [k6]
-    query: |
-      mutation CustomerMutation {
-        insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "cus"}) {
-          updated_at
-          last_name
-          id
-          first_name
-          external_ref_list
-          created_at
-          date_of_birth
-        }
-      }
-  - name: QuickInsert-Customer
-    tools: [k6]
-    # execution_strategy: REQUESTS_PER_SECOND
-    # rps: 600
-    # duration: 60s
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
-    connections: 500
-    query: |
-      mutation InsertMutation {
-        quickinsert_customer_one(object: {first_name: "test2", external_ref_list: ["text_external_ref2"], last_name: "cus"}) {
-          id
-          last_name
-          external_ref_list
-          date_of_birth
-          created_at
-          first_name
-          updated_at
-        }
-      }
   - name: List-Customer
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 500000
     connections: 500
     query: |
       query MyQuery {
@@ -89,14 +45,20 @@ queries:
           updated_at
         }
       }
-  - name: Create-Customer-Failed-Validation
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
-    connections: 500
+  - name: List-Customer-Slow
     tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 10000
+    connections: 500
     query: |
-      mutation CustomerMutation {
-        insert_customer_one(object: {first_name: "test", external_ref_list: ["text_external_ref"], last_name: "test"}) {
+      query MyQuery {
+        customer(offset: 500000, limit: 500) {
           id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
         }
       }

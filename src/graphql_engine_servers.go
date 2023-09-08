@@ -21,6 +21,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 	// create a waitgroup to wait for all cmds to finish
 	var wg sync.WaitGroup
 	// start scripting server at port 8888
+	log.Info("Starting scripting-server at port 8888")
 	cmd0 := exec.CommandContext(context.WithValue(ctx, "name", "scripting-server"), "python3", "/graphql-engine/scripting/server.py")
 	// route the output to stdout
 	cmd0.Stdout = os.Stdout
@@ -39,7 +40,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 		cmd0.Wait()
 	}()
 	cmds = append(cmds, cmd0)
-
+	log.Info("Starting graphql-engine primary at port 8881")
 	// start graphql-engine schema v1
 	cmd1 := exec.CommandContext(ctx, "graphql-engine", "serve", "--server-port", "8881")
 	// route the output to stdout
@@ -62,15 +63,21 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 
 	// start graphql-engine with database point to REPLICA, if the env is set
 	if os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS") != "" {
-		cmd2 := exec.CommandContext(context.WithValue(ctx, "name", "graphql-ro-server"), "graphql-engine", "serve", "--server-port", "8880", "--database-url", os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS"))
+		metadataDatabaseUrl := os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_URL")
+		if metadataDatabaseUrl == "" {
+			metadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
+		}
+		log.Info("Starting graphql-engine read replica at port 8880")
+		cmd2 := exec.CommandContext(context.WithValue(ctx, "name", "graphql-ro-server"), "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8880")
+		cmd2.Env = append(os.Environ(), "HASURA_GRAPHQL_DATABASE_URL="+os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS"))
 		// route the output to stdout
-		cmd2.Stdout = os.Stdout
+		cmd2.Stdout = nil
 		// override the cancel function to send sigterm instead of kill
 		cmd2.Cancel = func() error {
 			return cmd2.Process.Signal(syscall.SIGTERM)
 		}
 		if err := cmd2.Start(); err != nil {
-			log.Error("Error starting graphql-engine schema v2:", err)
+			log.Error("Error starting graphql-engine read replica:", err)
 			os.Exit(1)
 		}
 		// call Wait() in a goroutine to avoid blocking the main thread
@@ -81,29 +88,6 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 		}()
 		cmds = append(cmds, cmd2)
 	}
-
-	// start graphql-engine schema v2, if the env is set
-	if os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_URL_V2") != "" {
-		cmd3 := exec.CommandContext(ctx, "bash", "-c", "graphql-engine serve --server-port 8882 --metadata-database-url \"$HASURA_GRAPHQL_METADATA_DATABASE_URL_V2\"")
-		// route the output to stdout
-		cmd3.Stdout = os.Stdout
-		// override the cancel function to send sigterm instead of kill
-		cmd3.Cancel = func() error {
-			return cmd3.Process.Signal(syscall.SIGTERM)
-		}
-		if err := cmd3.Start(); err != nil {
-			log.Error("Error starting graphql-engine schema v2:", err)
-			os.Exit(1)
-		}
-		// call Wait() in a goroutine to avoid blocking the main thread
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			cmd3.Wait()
-		}()
-		cmds = append(cmds, cmd3)
-	}
-
 	// wait loop for the servers to start
 	for {
 		// check if the startupCtx is done
@@ -143,7 +127,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 				if cmd.ProcessState != nil {
 					// concat the args to get the process name
 					processName := strings.Join(cmd.Args[:min(len(cmd.Args), 4)], " ")
-					if cmd.ProcessState.Exited() == true {
+					if cmd.ProcessState.Exited() {
 						log.Info("Process exited successfully [" + processName + "]")
 					} else {
 						log.Info("Process exited with error " + cmd.ProcessState.String() + " [" + processName + "]")
@@ -163,12 +147,12 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 			return
 		default:
 			// loop through all cmds of processes to check if any of them is exited
-			if check == true {
+			if check {
 				for _, cmd := range cmds {
 					if cmd.ProcessState != nil {
 						// concat the args to get the process name
 						processName := strings.Join(cmd.Args[:min(len(cmd.Args), 4)], " ")
-						if cmd.ProcessState.Success() == true {
+						if cmd.ProcessState.Success() {
 							log.Error("Process unexpectedly exited with code 0 [" + processName + "]")
 						} else {
 							log.Error("Process unexpectedly exited with error " + cmd.ProcessState.String() + " [" + processName + "]")
@@ -182,7 +166,6 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 				}
 			}
 			time.Sleep(1 * time.Second)
-			break
 		}
 	}
 }

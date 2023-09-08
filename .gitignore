@@ -5,7 +5,7 @@
 *.out
 *.log
 report.html
-report.json
+report*.json
 # add ignore rules for python
 *.py[cod]
 __pycache__/

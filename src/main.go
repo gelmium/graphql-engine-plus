@@ -125,17 +125,31 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 	})
 
 	// get the PATH from environment variable
-	var v2Path = os.Getenv("ENGINE_PLUS_GRAPHQL_V2_PATH")
-	// default to /public/graphql/v2 if the env is not set
-	if v2Path == "" {
-		v2Path = "/public/graphql/v2"
+	var metadataPath = os.Getenv("ENGINE_PLUS_METADATA_PATH")
+	// default to /public/metadata/v1 if the env is not set
+	if metadataPath == "" {
+		metadataPath = "/public/metadata/"
+	}
+	// check if metadataPath end with /
+	// if not, add / to the end of metadataPath.
+	if metadataPath[len(metadataPath)-1:] != "/" {
+		metadataPath = metadataPath + "/"
 	}
 	// add a POST endpoint to forward request to an upstream url
-	app.Post(v2Path, func(c *fiber.Ctx) error {
+	app.Post(metadataPath+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
 		// fire a POST request to the upstream url using the same header and body from the original request
-		agent := fiber.Post("http://localhost:8882/v1/graphql")
+		agent := fiber.Post("http://localhost:8881/" + c.Params("+"))
+		// send request to upstream without caching
+		return sendRequestToUpstream(c, agent)
+	})
+	// add a GET endpoint to forward request to an upstream url
+	app.Get(metadataPath+"+", func(c *fiber.Ctx) error {
+		// check and wait for startupCtx to be done
+		waitForStartupToBeCompleted(startupCtx)
+		// fire a POST request to the upstream url using the same header and body from the original request
+		agent := fiber.Get("http://localhost:8881/" + c.Params("+"))
 		// send request to upstream without caching
 		return sendRequestToUpstream(c, agent)
 	})

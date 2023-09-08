@@ -9,19 +9,23 @@ export
 install:  ## install project dependencies
 	# allow vscode to use python env in devcontainer to suggest 
 	pip install -r src/scripting/requirements.txt
-	# curl -L https://github.com/hasura/graphql-engine/raw/stable/cli/get.sh | bash
+	# install hasura cli if not yet installed
+	[ -f /usr/local/bin/hasura ] || curl -L https://github.com/hasura/graphql-engine/raw/stable/cli/get.sh | bash
+
+golangci-lint:
+	docker run -it --rm -v "$$PWD/src":/src -w /src golangci/golangci-lint:latest golangci-lint run -v	
 	
 up:  ## run the project in local
 	make build.out ARCH=$(shell dpkg --print-architecture)
 	docker-compose up -d
 	bash scripts/prepare_local_redis.sh
 
-hasura-metadatav1-export:  ## export graphql metadata to yaml files in src/schema/v1
-	docker-compose exec graphql-engine hasura metadata export --project ./schema/v1
-hasura-metadatav1-apply:  ## apply graphql metadata yaml files in src/schema/v1
-	docker-compose exec graphql-engine hasura metadata apply --project ./schema/v1
-hasura-metadatav1-show-inconsistent:  ## show inconsistent metadata yaml files in src/schema/v1
-	docker-compose exec graphql-engine hasura metadata inconsistency list --project ./schema/v1
+hasura-metadata-export-example-v1:  ## export graphql metadata to yaml files in src/schema/v1
+	hasura metadata export --project ./example/graphql-engine/schema/v1
+hasura-metadata-apply-example-v1:  ## apply graphql metadata yaml files in src/schema/v1
+	hasura metadata apply --project ./example/graphql-engine/schema/v1
+hasura-metadata-show-inconsistent-example-v1:  ## show inconsistent metadata yaml files in src/schema/v1
+	hasura metadata inconsistency list --project ./example/graphql-engine/schema/v1
 
 hasura-migratev1-create-migration-from-server:
 	docker-compose exec graphql-engine hasura migrate create "CHANGE-ME" --from-server --database-name default --project ./schema/v1 --schema public
@@ -34,6 +38,8 @@ run-warmup-apprunner:
 	docker run --rm -it haydenjeune/wrk2:latest -t4 -c500 -d100s -R5500 --latency $(WARMUP_HEALTH_ENDPOINT_URL)?sleep=100000
 run-graphql-benchmark:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
+run-graphql-benchmark-readonly:
+	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.readonly-query.yaml" --outfile="tmp/report-readonly.json"	
 run-redis-insight:
 	docker run --rm --name redisinsight -v redisinsight:/db -p 5001:8001 redislabs/redisinsight:latest
 redis-del-all-data:

@@ -1,4 +1,5 @@
 version: 3
-endpoint: http://localhost:8881
-actions:
-  handler_webhook_baseurl: http://localhost:8888
+endpoint: http://localhost:8000/public/metadata/
+# endpoint: https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/metadata/v1
+# actions:
+#   handler_webhook_baseurl: http://localhost:8888
