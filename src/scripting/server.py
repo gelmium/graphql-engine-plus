@@ -259,19 +259,36 @@ async def validate_json_code_handler(request: web.Request):
 
 
 async def healthcheck_graphql_engine(request: web.Request):
+    result = {"primary": {}, "replica": {}}
     async with aiohttp.ClientSession() as http_session:
         try:
             async with http_session.get(
                 "http://localhost:8881/healthz?strict=true"
             ) as resp:
                 # extract the response status code and body
-                return web.Response(
-                    status=resp.status,
-                    headers={
-                        "Content-type": "application/json",
-                    },
-                    body=json_encoder.encode({"status": await resp.text()}),
-                )
+                result["primary"] = {"status": resp.status, "body": await resp.text()}
+
+            if os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS"):
+                async with http_session.get(
+                    "http://localhost:8880/healthz"
+                ) as resp:
+                    # extract the response status code and body
+                    result["replica"] = {
+                        "status": resp.status,
+                        "body": await resp.text(),
+                    }
+            health_status = 200
+            if result["replica"].get("status", 200) != 200:
+                health_status = result["replica"]["status"]
+            if result["primary"]["status"] != 200:
+                health_status = result["primary"]["status"]
+            return web.Response(
+                status=health_status,
+                headers={
+                    "Content-type": "application/json",
+                },
+                body=json_encoder.encode(result),
+            )
         except Exception as e:
             return web.Response(
                 status=500,
@@ -407,10 +424,8 @@ class AccessLogger(AbstractAccessLogger):
     def log(self, request, response, response_time):
         latency = float(response.headers.get("X-Execution-Time", response_time))
         # start time of request in UNIX time %t
-        try:
-            start_time = request.start_time
-        except AttributeError:
-            start_time = time.time() - latency
+        start_time = getattr(request, 
+                             "start_time", time.time() - latency)
         self.logger.info(
             f'{datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%S.%f")}'
             f' " {request.method.ljust(8)} {request.path}" {response.status}  {latency*1000:6f}ms'

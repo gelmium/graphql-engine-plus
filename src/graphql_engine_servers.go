@@ -69,7 +69,9 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 		}
 		log.Info("Starting graphql-engine read replica at port 8880")
 		cmd2 := exec.CommandContext(context.WithValue(ctx, "name", "graphql-ro-server"), "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8880")
-		cmd2.Env = append(os.Environ(), "HASURA_GRAPHQL_DATABASE_URL="+os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS"))
+		cmd2.Env = append(os.Environ(),
+			"HASURA_GRAPHQL_DATABASE_URL="+os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS"),
+		)
 		// route the output to stdout
 		cmd2.Stdout = nil
 		// override the cancel function to send sigterm instead of kill
