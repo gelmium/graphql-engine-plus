@@ -260,6 +260,9 @@ async def validate_json_code_handler(request: web.Request):
 
 async def healthcheck_graphql_engine(request: web.Request):
     result = {"primary": {}, "replica": {}}
+    # check for GET params
+    if bool(request.query.get("quite")):
+        request.silent_access_log = True
     async with aiohttp.ClientSession() as http_session:
         try:
             async with http_session.get(
@@ -269,9 +272,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                 result["primary"] = {"status": resp.status, "body": await resp.text()}
 
             if os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS"):
-                async with http_session.get(
-                    "http://localhost:8880/healthz"
-                ) as resp:
+                async with http_session.get("http://localhost:8880/healthz") as resp:
                     # extract the response status code and body
                     result["replica"] = {
                         "status": resp.status,
@@ -422,14 +423,15 @@ async def cleanup_server(app):
 
 class AccessLogger(AbstractAccessLogger):
     def log(self, request, response, response_time):
+        if getattr(request, "silent_access_log", False):
+            return
         latency = float(response.headers.get("X-Execution-Time", response_time))
         # start time of request in UNIX time %t
-        start_time = getattr(request, 
-                             "start_time", time.time() - latency)
+        start_time = getattr(request, "start_time", time.time() - latency)
         self.logger.info(
             f'{datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%S.%f")}'
             f' " {request.method.ljust(8)} {request.path}" {response.status}  {latency*1000:6f}ms'
-            f' ({response.body_length}) "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
+            f' ({response.body_length}) [{request.headers.get("X-Request-ID", "")}] "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
         )
 
 

@@ -31,17 +31,38 @@ queries:
   - name: List-Customer
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 800000
+    requests: 500000
     connections: 500
     query: |
       query MyQuery {
         customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
           id
           last_name
+          external_ref_list
+          date_of_birth
+          created_at
           first_name
+          updated_at
         }
       }
-  - name: List-Customer-Slow
+  - name: List-Customer-Large-Batch
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 30000
+    connections: 500
+    query: |
+      query MyQuery {
+        customer(limit: 25000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
+        }
+      }
+  - name: List-Customer-Slow-Query
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 20000

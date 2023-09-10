@@ -64,6 +64,7 @@ clean:  ## clean up build artifacts
 	rm -f .*.out *.out
 
 build.graphql-engine-plus:
+	cd ./src/;go mod tidy
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
 build.graphql-engine-plus-nginx:
 	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):nginx-latest -f nginx.Dockerfile ./src

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,6 +16,37 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 )
+
+func StartScannerForBuffer(ctx context.Context, stdoutReader io.Reader) chan string {
+	lines := make(chan string)
+	go func() {
+		scanner := bufio.NewScanner(stdoutReader)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+			// check for ctx cancel
+			if ctx.Err() != nil {
+				break
+			}
+		}
+	}()
+	return lines
+}
+
+func ParseLog(ctx context.Context, lines chan string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line := <-lines:
+			// check if line contain this error
+			if strings.Contains(line, "cannot set transaction read-write mode during recovery") {
+				// ignore this line
+				continue
+			}
+			fmt.Println(line)
+		}
+	}
+}
 
 func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.CancelFunc, startupCtx context.Context, startupDoneFn context.CancelFunc, shutdownErrorChanel chan error) {
 	// create an empty list of cmds
@@ -44,6 +77,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 	// start graphql-engine schema v1
 	cmd1 := exec.CommandContext(ctx, "graphql-engine", "serve", "--server-port", "8881")
 	// route the output to stdout
+	cmd1.Stderr = os.Stderr
 	cmd1.Stdout = os.Stdout
 	// override the cancel function to send sigterm instead of kill
 	cmd1.Cancel = func() error {
@@ -73,7 +107,12 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 			"HASURA_GRAPHQL_DATABASE_URL="+os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS"),
 		)
 		// route the output to stdout
-		cmd2.Stdout = nil
+		stdoutReader, stdoutWriter := io.Pipe()
+		cmd2.Stderr = os.Stderr
+		cmd2.Stdout = stdoutWriter
+		// setup buf scanner and log parser
+		cmd2outLines := StartScannerForBuffer(ctx, stdoutReader)
+		go ParseLog(ctx, cmd2outLines)
 		// override the cancel function to send sigterm instead of kill
 		cmd2.Cancel = func() error {
 			return cmd2.Process.Signal(syscall.SIGTERM)
@@ -98,7 +137,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 			break
 		}
 		// fire GET request to app runner health url using fiber.GET
-		agent := fiber.Get("http://localhost:8888/health/engine")
+		agent := fiber.Get("http://localhost:8888/health/engine?quite=true")
 		if err := agent.Parse(); err != nil {
 			log.Warn(fmt.Sprintf("Startup wait engine servers: %v", err))
 		}
