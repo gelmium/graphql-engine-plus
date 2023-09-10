@@ -4,12 +4,14 @@ package main
 import (
 	"context"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
 	gfshutdown "github.com/gelmium/graceful-shutdown"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
+	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 )
 
@@ -25,10 +27,14 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 }
 
 func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
+	rePattern, err := regexp.Compile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
+	if err != nil {
+		log.Error(err)
+	}
 	for k, v := range c.GetReqHeaders() {
 		// filter out the header that we don't want to forward
-		// such as: Accept-Encoding, Content-Length, Content-Type, X-Forwarded-For
-		if k == "Host" || k == "Accept-Encoding" || k == "Content-Length" || k == "Content-Type" {
+		// such as: Accept-Encoding, Content-Length, Content-Type, Host
+		if rePattern.MatchString(k) {
 			continue
 		}
 		agent.Set(k, v)
@@ -73,9 +79,15 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 		},
 	)
 	app.Use(logger.New(logger.Config{
-		Format:     "${time} \"${method} ${path}\"${status} ${latency} (${bytesSent}) \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
+		Format:     "${time} \"${method} ${path}\"${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
 	}))
+
+	// Compress middleware
+	app.Use(compress.New(compress.Config{
+		Level: compress.LevelBestSpeed, // 1
+	}))
+
 	// get the HEALTH_CHECK_PATH from environment variable
 	var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
 	// default to /public/graphql/health if the env is not set
