@@ -103,6 +103,7 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 		code, body, errs := agent.Bytes()
 		if len(errs) > 0 {
 			log.Error(errs)
+			return c.Status(500).SendString(errs[0].Error())
 		}
 		// return the response from the upstream url
 		return c.Status(code).Send(body)

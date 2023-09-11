@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -55,7 +56,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 	var wg sync.WaitGroup
 	// start scripting server at port 8888
 	log.Info("Starting scripting-server at port 8888")
-	cmd0 := exec.CommandContext(context.WithValue(ctx, "name", "scripting-server"), "python3", "/graphql-engine/scripting/server.py")
+	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py")
 	// route the output to stdout
 	cmd0.Stdout = os.Stdout
 	// override the cancel function to send sigterm instead of kill
@@ -102,17 +103,33 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 			metadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
 		}
 		log.Info("Starting graphql-engine read replica at port 8880")
-		cmd2 := exec.CommandContext(context.WithValue(ctx, "name", "graphql-ro-server"), "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8880")
-		cmd2.Env = append(os.Environ(),
-			"HASURA_GRAPHQL_DATABASE_URL="+os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS"),
-		)
+		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8880")
+		replicaUrlsString := os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
+		replicaUrlList := strings.Split(replicaUrlsString, ",")
+		cmd2Env := os.Environ()
+		if len(replicaUrlList) > 1 {
+			// if there are more than 1 urls in HASURA_GRAPHQL_READ_REPLICA_URLS
+			// each url in replicaUrList must be in a form of ENV_KEY=url
+			cmd2.Env = append(cmd2Env, replicaUrlList...)
+		} else {
+			replicaUrl := replicaUrlList[0]
+			// check if replicaUrl is in a form of key=value
+			matched, _ := regexp.MatchString(`^\w+=`, replicaUrl)
+			if matched {
+				cmd2.Env = append(cmd2Env, replicaUrl)
+			} else {
+				// if not, assume that the replicaUrl is the database url with default
+				// ENV_KEY is HASURA_GRAPHQL_DATABASE_URL
+				cmd2.Env = append(cmd2Env, "HASURA_GRAPHQL_DATABASE_URL="+replicaUrl)
+			}
+		}
 		// route the output to stdout
 		stdoutReader, stdoutWriter := io.Pipe()
 		cmd2.Stderr = os.Stderr
 		cmd2.Stdout = stdoutWriter
 		// setup buf scanner and log parser
-		cmd2outLines := StartScannerForBuffer(ctx, stdoutReader)
-		go ParseLog(ctx, cmd2outLines)
+		cmd2StdoutLines := StartScannerForBuffer(ctx, stdoutReader)
+		go ParseLog(ctx, cmd2StdoutLines)
 		// override the cancel function to send sigterm instead of kill
 		cmd2.Cancel = func() error {
 			return cmd2.Process.Signal(syscall.SIGTERM)

@@ -8,7 +8,6 @@ from aiohttp.abc import AbstractAccessLogger
 import asyncio
 import sys
 import redis.asyncio as redis
-import asyncpg
 import time
 from gql_client import GqlAsyncClient
 from datetime import datetime
@@ -312,13 +311,7 @@ async def get_app():
         app["redis_client"] = await redis.from_url(redis_url)
 
     app["graphql_client"] = GqlAsyncClient()
-    app["psql_client"] = await asyncpg.connect(
-        dsn=os.environ["HASURA_GRAPHQL_DATABASE_URL"]
-    )
-    replica_db_url = os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS")
-    if replica_db_url:
-        # only use the first replica db url even if there are multiple
-        app["psql_readonly"] = await asyncpg.connect(dsn=replica_db_url.split(",")[0])
+    
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
     ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
     if ENGINE_PLUS_ENABLE_BOTO3:
@@ -411,11 +404,6 @@ async def cleanup_server(app):
     if boto3_context_stack:
         print("Scripting server shutdown: Closing boto3 session")
         futures.append(boto3_context_stack.aclose())
-    # close the psql connections
-    psql_client = app.get("psql_client")
-    if psql_client:
-        print("Scripting server shutdown: Closing psql connection")
-        futures.append(psql_client.close())
     # wait all futures
     await asyncio.gather(*futures)
     print("Scripting server shutdown: Finished")
