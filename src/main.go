@@ -95,6 +95,12 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 		healthCheckPath = "/public/graphql/health"
 	}
 	app.Get(healthCheckPath, func(c *fiber.Ctx) error {
+		// check for startupCtx to be done
+		if startupCtx.Err() == nil {
+			log.Warn("Startup has not yet completed, return OK for health check anyway")
+			return c.SendStatus(fiber.StatusOK)
+			// Or we can wait for startupCtx to be done here: <-startupCtx.Done()
+		}
 		// fire GET request to scripting server to do full healthcheck of all engines
 		agent := fiber.Get("http://localhost:8888/health/engine")
 		if err := agent.Parse(); err != nil {
@@ -176,11 +182,7 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 	// add a POST endpoint to forward request to an upstream url
 	app.Post(roPath, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
-		if startupCtx.Err() == nil {
-			log.Warn("Waiting for startup to be completed")
-			// this wait can last for max 60s
-			<-startupCtx.Done()
-		}
+		waitForStartupToBeCompleted(startupCtx)
 		// check if this is read only request
 		graphqlReq, err := ParseGraphQLRequest(c)
 		if err != nil {
