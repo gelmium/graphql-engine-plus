@@ -25,14 +25,15 @@ func ParseGraphQLRequest(c *fiber.Ctx) (*GraphQLRequest, error) {
 	return &req, nil
 }
 
-func IsMutationGraphQLRequest(req *GraphQLRequest) bool {
+var mutationRegex = regexp.MustCompile(`(?i)^\s*mutation\W`)
+var subscriptionRegex = regexp.MustCompile(`(?i)^\s*subscription\W`)
+
+func (req *GraphQLRequest) IsMutationGraphQLRequest() bool {
 	// check if the query is a mutation with regex
-	ok, _ := regexp.MatchString(`(?i)^\s*mutation\W`, req.Query)
-	return ok
+	return mutationRegex.MatchString(req.Query)
 }
 
-func IsSubscriptionGraphQLRequest(req *GraphQLRequest) bool {
+func (req *GraphQLRequest) IsSubscriptionGraphQLRequest() bool {
 	// check if the query is a subscription with regex
-	ok, _ := regexp.MatchString(`(?i)^\s*subscription\W`, req.Query)
-	return ok
+	return subscriptionRegex.MatchString(req.Query)
 }

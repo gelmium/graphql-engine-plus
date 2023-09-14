@@ -24,7 +24,12 @@ exec_cache = {}
 # global variable to cache the boto3 session
 boto3_session = aioboto3.Session()
 
-ENGINE_PLUS_EXECUTE_SECRET = os.environ.get("ENGINE_PLUS_EXECUTE_SECRET")
+# environment variables
+ENGINE_PLUS_ALLOW_EXECURL = os.environ.get("ENGINE_PLUS_ALLOW_EXECURL")
+ENGINE_PLUS_EXECUTE_SECRET = os.environ.get(
+    "ENGINE_PLUS_EXECUTE_SECRET", os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
+)
+
 logger = logging.getLogger("scripting-server")
 # Pre create json encoder/decoder for server to reuse for every request
 json_encoder = msgspec.json.Encoder()
@@ -38,7 +43,7 @@ async def exec_script(request: web.Request, body):
         # remove the execproxy from body, to prevent infinite loop
         del body["execproxy"]
         # forward the request to execproxy
-        req_body = str(json_encoder.encode(body))
+        req_body = json_encoder.encode(body)
         req_headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -114,15 +119,17 @@ async def exec_script(request: web.Request, body):
     # The `execurl` feature is required only if want to
     # add new script/modify existing script on the fly without deployment
     execurl = body.get("execurl")
-    if ENGINE_PLUS_EXECUTE_SECRET:
+    if ENGINE_PLUS_ALLOW_EXECURL:
         if execurl:
             # this is to increase security to prevent unauthorized script execution from URL
-            if (
-                request.headers.get("X-Engine-Plus-Execute-Secret")
-                != ENGINE_PLUS_EXECUTE_SECRET
-            ):
-                raise Exception(
+            req_execute_secret = request.headers.get("X-Engine-Plus-Execute-Secret")
+            if not req_execute_secret:
+                raise ValueError(
                     "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
+                )
+            if req_execute_secret != ENGINE_PLUS_EXECUTE_SECRET:
+                raise ValueError(
+                    "The value of header X-Engine-Plus-Execute-Secret is not matched the value of ENGINE_PLUS_EXECUTE_SECRET"
                 )
             exec_main_func = exec_cache.get(execurl)
             if not exec_main_func or body.get("execfresh"):
@@ -135,7 +142,7 @@ async def exec_script(request: web.Request, body):
     else:
         if execurl:
             raise Exception(
-                "To execute script from URL (execurl), you must set a value for this environment: ENGINE_PLUS_EXECUTE_SECRET"
+                "To execute script from URL (execurl), you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
             )
     # the script must define this function: `async def main(request, body, transport):`
     # so it can be executed here in curent context
@@ -311,7 +318,9 @@ async def get_app():
         app["redis_client"] = await redis.from_url(redis_url)
 
     app["graphql_client"] = GqlAsyncClient()
-    
+    app["json_encoder"] = json_encoder
+    app["json_decoder"] = json_decoder
+
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
     ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
     if ENGINE_PLUS_ENABLE_BOTO3:

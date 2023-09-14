@@ -37,7 +37,6 @@ services:
       interval: 5s
       timeout: 3s
   graphql-engine:
-    # image: gelmium/graphql-engine-plus:latest
     image: graphql-engine-plus:latest
     ports:
       - "8000:8000"

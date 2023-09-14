@@ -4,7 +4,7 @@ from aiohttp import web
 
 
 async def main(request: web.Request, body):
-    import os, logging, time, json
+    import logging, time
     from datetime import datetime
 
     logger = logging.getLogger("sync_to_dynamodb.py")
@@ -23,6 +23,8 @@ async def main(request: web.Request, body):
     # require boto3 session to be initialized, by set environment
     # ENGINE_PLUS_ENABLE_BOTO3 to include 'dynamodb'
     boto3_dynamodb = request.app["boto3_dynamodb"]
+    json_encoder = request.app["json_encoder"]
+    json_decoder = request.app["json_decoder"]
 
     def convert_timestamp_fields_of_object_to_epoch(object_data):
         # scan the object_data for timestamp string fields and convert them to epoch
@@ -62,7 +64,7 @@ async def main(request: web.Request, body):
         # set TTL to 7 days (dynamodb uses epoch in seconds)
         object_data["ttl"] = int(time.time()) + 7 * 24 * 60 * 60
         # push it to start of the queue
-        queue_len = await r.lpush(sync_queue_name, json.dumps(object_data))
+        queue_len = await r.lpush(sync_queue_name, json_encoder.encode(object_data))
         # check if the queue is full and process it
         if queue_len >= BATCH_SIZE:
             # pop a batch from the queue
@@ -72,7 +74,7 @@ async def main(request: web.Request, body):
                 table = await boto3_dynamodb.Table(table_name)
                 async with table.batch_writer() as dynamo_writer:
                     for object_data_json_str in objects_batch:
-                        object_data = json.loads(object_data_json_str)
+                        object_data = json_decoder.decode(object_data_json_str)
                         logger.info(
                             f"Batch write object.id={object_data['id']} into table `{table_name}`"
                         )
@@ -87,7 +89,7 @@ async def main(request: web.Request, body):
             "created_at": object_data["created_at"],
         }
         # push it to start of the queue
-        queue_len = await r.lpush(delete_queue_name, json.dumps(object_key))
+        queue_len = await r.lpush(delete_queue_name, json_encoder.encode(object_key))
         # check if the queue is full and process it
         if queue_len >= BATCH_SIZE:
             count = 0
@@ -99,7 +101,7 @@ async def main(request: web.Request, body):
                 async with table.batch_writer() as dynamo_writer:
                     # deduplicate, dynamodb doesnt allow batch delete_item with duplicate keys
                     for object_key_json_sr in list(set(objects_batch)):
-                        object_key = json.loads(object_key_json_sr)
+                        object_key = json_decoder.decode(object_key_json_sr)
                         logger.info(
                             f"Batch delete object.id={object_key['id']} from table `{table_name}`"
                         )

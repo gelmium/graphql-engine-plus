@@ -26,15 +26,13 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 	}
 }
 
+var notForwardHeaderRegex = regexp.MustCompile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
+
 func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
-	rePattern, err := regexp.Compile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
-	if err != nil {
-		log.Error(err)
-	}
 	for k, v := range c.GetReqHeaders() {
 		// filter out the header that we don't want to forward
 		// such as: Accept-Encoding, Content-Length, Content-Type, Host
-		if rePattern.MatchString(k) {
+		if notForwardHeaderRegex.MatchString(k) {
 			continue
 		}
 		agent.Set(k, v)
@@ -137,10 +135,29 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 	app.Post(v1Path, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
-		// fire a POST request to the upstream url using the same header and body from the original request
-		agent := fiber.Post("http://localhost:8881/v1/graphql")
-		// send request to upstream without caching
-		return sendRequestToUpstream(c, agent)
+		// check if this is read only request
+		graphqlReq, err := ParseGraphQLRequest(c)
+		if err != nil {
+			// return a Fiber error if can't parse the request
+			return err
+		}
+
+		if graphqlReq.IsSubscriptionGraphQLRequest() {
+			// TODO: support subscription via another websocket endpoint in the future
+			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
+		}
+
+		if graphqlReq.IsMutationGraphQLRequest() {
+			// fire a POST request to the upstream url using the same header and body from the original request
+			agent := fiber.Post("http://localhost:8881/v1/graphql")
+			// send mutation request to primary upstream
+			return sendRequestToUpstream(c, agent)
+		} else {
+			// fire a POST request to the upstream url using the same header and body from the original request
+			agent := fiber.Post("http://localhost:8880/v1/graphql")
+			// send mutation request to replica upstream
+			return sendRequestToUpstream(c, agent)
+		}
 	})
 
 	// get the PATH from environment variable
@@ -189,11 +206,11 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 			// return a Fiber error if can't parse the request
 			return err
 		}
-		if IsMutationGraphQLRequest(graphqlReq) {
+		if graphqlReq.IsMutationGraphQLRequest() {
 			// return a Fiber error if the request is a mutation
 			return fiber.NewError(fiber.StatusForbidden, "readonly endpoint does not allow mutation")
 		}
-		if IsSubscriptionGraphQLRequest(graphqlReq) {
+		if graphqlReq.IsSubscriptionGraphQLRequest() {
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
