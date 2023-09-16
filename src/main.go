@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"regexp"
 	"strconv"
@@ -67,7 +68,7 @@ func sendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
 }
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
-func setupFiber(startupCtx context.Context) *fiber.App {
+func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) *fiber.App {
 	app := fiber.New(
 		fiber.Config{
 			ReadTimeout:  60 * time.Second,
@@ -131,6 +132,16 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 	if v1Path == "" {
 		v1Path = "/public/graphql/v1"
 	}
+	primaryVsReplicaWeight := 100
+	if os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS") != "" {
+		primaryVsReplicaWeight = 50
+		// parse the primary weight from env, convert it to int
+		primaryWeightInt, err := strconv.Atoi(os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT"))
+		if err == nil {
+			primaryVsReplicaWeight = primaryWeightInt
+		}
+	}
+
 	// add a POST endpoint to forward request to an upstream url
 	app.Post(v1Path, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
@@ -147,17 +158,10 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
 
-		if graphqlReq.IsMutationGraphQLRequest() {
-			// fire a POST request to the upstream url using the same header and body from the original request
-			agent := fiber.Post("http://localhost:8881/v1/graphql")
-			// send mutation request to primary upstream
-			return sendRequestToUpstream(c, agent)
-		} else {
-			// fire a POST request to the upstream url using the same header and body from the original request
-			agent := fiber.Post("http://localhost:8880/v1/graphql")
-			// send mutation request to replica upstream
-			return sendRequestToUpstream(c, agent)
-		}
+		// fire a POST request to the upstream url using the same header and body from the original request
+		agent := fiber.Post("http://localhost:8881/v1/graphql")
+		// send mutation request to primary upstream
+		return sendRequestToUpstream(c, agent)
 	})
 
 	// get the PATH from environment variable
@@ -215,10 +219,21 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
 
-		// fire a POST request to the upstream url using the same header and body from the original request
-		agent := fiber.Post("http://localhost:8880/v1/graphql")
-		// send request to upstream without caching
-		return sendRequestToUpstream(c, agent)
+		// random an int from 0 to 99
+		// if randomInt is less than primaryWeight, send request to primary upstream
+		// if replica is not available, always send request to primary upstream
+		if startupReadonlyCtx.Err() == nil || primaryVsReplicaWeight >= 100 || (primaryVsReplicaWeight > 0 && rand.Intn(100) < primaryVsReplicaWeight) {
+			// log.Debug("send request to primary upstream")
+			agent := fiber.Post("http://localhost:8881/v1/graphql")
+			// send query request to primary upstream
+			return sendRequestToUpstream(c, agent)
+		} else {
+			// log.Debug("send request to replica upstream")
+			// fire a POST request to the upstream url using the same header and body from the original request
+			agent := fiber.Post("http://localhost:8880/v1/graphql")
+			// send query request to replica upstream
+			return sendRequestToUpstream(c, agent)
+		}
 	})
 
 	// get the PATH from environment variable
@@ -250,7 +265,8 @@ func setupFiber(startupCtx context.Context) *fiber.App {
 func main() {
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
-	app := setupFiber(startupCtx)
+	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
+	app := setupFiber(startupCtx, startupReadonlyCtx)
 	// get the server Host:Port from environment variable
 	var serverHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")
 	// default to empty string if the env is not set
@@ -264,7 +280,7 @@ func main() {
 
 	serverShutdownErrorChanel := make(chan error)
 	startServerCtx, startServerCtxCancelFn := context.WithCancel(mainCtx)
-	go StartGraphqlEngineServers(startServerCtx, mainCtxCancelFn, startupCtx, startupDoneFn, serverShutdownErrorChanel)
+	go StartGraphqlEngineServers(startServerCtx, mainCtxCancelFn, startupCtx, startupDoneFn, startupReadonlyCtx, startupReadonlyDoneFn, serverShutdownErrorChanel)
 
 	// register engine-servers & http-server clean-up operations
 	// then wait for termination signal to do the clean-up

@@ -21,8 +21,10 @@ import msgspec
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
 exec_cache = {}
+ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
 # global variable to cache the boto3 session
-boto3_session = aioboto3.Session()
+if ENGINE_PLUS_ENABLE_BOTO3:
+    boto3_session = aioboto3.Session()
 
 # environment variables
 ENGINE_PLUS_ALLOW_EXECURL = os.environ.get("ENGINE_PLUS_ALLOW_EXECURL")
@@ -267,18 +269,23 @@ async def validate_json_code_handler(request: web.Request):
 async def healthcheck_graphql_engine(request: web.Request):
     result = {"primary": {}, "replica": {}}
     # check for GET params
+    not_include = request.query.get("not", "")
     if bool(request.query.get("quite")):
         request.silent_access_log = True
     async with aiohttp.ClientSession() as http_session:
         try:
             async with http_session.get(
-                "http://localhost:8881/healthz?strict=true"
+                "http://localhost:8881/healthz?strict=true", timeout=3
             ) as resp:
                 # extract the response status code and body
                 result["primary"] = {"status": resp.status, "body": await resp.text()}
-
-            if os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS"):
-                async with http_session.get("http://localhost:8880/healthz") as resp:
+            if (
+                os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS")
+                and "replica" not in not_include
+            ):
+                async with http_session.get(
+                    "http://localhost:8880/healthz", timeout=3
+                ) as resp:
                     # extract the response status code and body
                     result["replica"] = {
                         "status": resp.status,
@@ -322,7 +329,6 @@ async def get_app():
     app["json_decoder"] = json_decoder
 
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
-    ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
     if ENGINE_PLUS_ENABLE_BOTO3:
         init_resources = ENGINE_PLUS_ENABLE_BOTO3.split(",")
         # TODO: add support for different region
@@ -434,7 +440,12 @@ class AccessLogger(AbstractAccessLogger):
 
 if __name__ == "__main__":
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    web.run_app(get_app(), host="127.0.0.1", port=8888, access_log_class=AccessLogger)
+    web.run_app(
+        get_app(),
+        host="127.0.0.1",
+        port=int(sys.argv[1]) if len(sys.argv) > 1 else 8888,
+        access_log_class=AccessLogger,
+    )
     # try to cancel any running async tasks
     for task in async_tasks:
         if not task.done():

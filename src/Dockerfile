@@ -32,9 +32,9 @@ RUN pip3 install -r /graphql-engine/scripting/requirements.txt \
 COPY ./scripting /graphql-engine/scripting
 ADD ./migrate_hasura.sh /root/migrate_hasura.sh
 
-# Copy and set the ENTRYPOINT to the executable
+# Copy and set the CMD to the executable
 COPY --from=build-server /bin/server /bin/
-ENTRYPOINT ["/bin/server"]
+CMD ["/bin/server"]
 
 # Add healthcheck
 HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:8888/health/engine || exit 1

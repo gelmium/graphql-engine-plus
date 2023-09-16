@@ -49,7 +49,11 @@ func ParseLog(ctx context.Context, lines chan string) {
 	}
 }
 
-func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.CancelFunc, startupCtx context.Context, startupDoneFn context.CancelFunc, shutdownErrorChanel chan error) {
+func StartGraphqlEngineServers(
+	ctx context.Context, mainCtxCancelFn context.CancelFunc,
+	startupCtx context.Context, startupDoneFn context.CancelFunc,
+	startupReadonlyCtx context.Context, startupReadonlyDoneFn context.CancelFunc,
+	shutdownErrorChanel chan error) {
 	// create an empty list of cmds
 	var cmds []*exec.Cmd
 	// create a waitgroup to wait for all cmds to finish
@@ -130,10 +134,10 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 		// setup buf scanner and log parser
 		cmd2StdoutLines := StartScannerForBuffer(ctx, stdoutReader)
 		go ParseLog(ctx, cmd2StdoutLines)
-		// override the cancel function to send sigterm instead of kill
-		cmd2.Cancel = func() error {
-			return cmd2.Process.Signal(syscall.SIGTERM)
-		}
+		// its ok to kill this process, as it only serve readonly queries
+		// cmd2.Cancel = func() error {
+		// 	return cmd2.Process.Signal(syscall.SIGTERM)
+		// }
 		if err := cmd2.Start(); err != nil {
 			log.Error("Error starting graphql-engine read replica:", err)
 			os.Exit(1)
@@ -145,16 +149,42 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 			cmd2.Wait()
 		}()
 		cmds = append(cmds, cmd2)
+		// loop for the readonly replica engine to start, we dont need to wait for it
+		// so can run in a goroutine
+		go func() {
+			for {
+				// check if the startupReadonlyCtx is done
+				if startupReadonlyCtx.Err() != nil {
+					log.Error("readonly replica graphql engine is not yet ready after 60s")
+					break
+				}
+				//sleep for 0.5s
+				time.Sleep(500 * time.Millisecond)
+				// fire GET request to app runner health url using fiber.GET
+				agent := fiber.Get("http://localhost:8880/healthz")
+				if err := agent.Parse(); err != nil {
+					log.Warn(fmt.Sprintf("Startup wait readonly replica engine server: %v", err))
+				}
+				code, _, _ := agent.Bytes()
+				if code == 200 {
+					log.Info("GraphQL Engine Plus readonly replica engine is ready")
+					startupReadonlyDoneFn()
+					break
+				}
+			}
+		}()
 	}
-	// wait loop for the servers to start
+	// wait loop for the scripting server + primary engine to start
 	for {
 		// check if the startupCtx is done
 		if startupCtx.Err() != nil {
-			log.Error("scripting server or graphql engines is not yet ready after 60s")
+			log.Error("scripting server or primary graphql engine is not yet ready after 60s")
 			break
 		}
+		//sleep for 0.5s
+		time.Sleep(500 * time.Millisecond)
 		// fire GET request to app runner health url using fiber.GET
-		agent := fiber.Get("http://localhost:8888/health/engine?quite=true")
+		agent := fiber.Get("http://localhost:8888/health/engine?quite=true&not=replica")
 		if err := agent.Parse(); err != nil {
 			log.Warn(fmt.Sprintf("Startup wait engine servers: %v", err))
 		}
@@ -166,9 +196,6 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 			startupDoneFn()
 			log.Info("GraphQL Engine Plus is ready")
 			break
-		} else {
-			//sleep for 1s
-			time.Sleep(1 * time.Second)
 		}
 	}
 	// Wait for any process to exit, does not matter if it is graphql-engine, python or nginx
@@ -189,7 +216,7 @@ func StartGraphqlEngineServers(ctx context.Context, mainCtxCancelFn context.Canc
 						log.Info("Process exited successfully [" + processName + "]")
 					} else {
 						log.Info("Process exited with error " + cmd.ProcessState.String() + " [" + processName + "]")
-						errString += cmd.ProcessState.String() + "\n"
+						errString += cmd.ProcessState.String() + " [" + processName + "]\n"
 					}
 				}
 			}

@@ -19,6 +19,8 @@ up:  ## run the project in local
 	make build.out ARCH=$(shell dpkg --print-architecture)
 	docker-compose up -d
 	bash scripts/prepare_local_redis.sh
+logs-follow-graphql-engine:
+	docker-compose logs -f graphql-engine
 
 hasura-metadata-export-example-v1:  ## export graphql metadata to yaml files in src/schema/v1
 	hasura metadata export --project ./example/graphql-engine/schema/v1
@@ -35,7 +37,7 @@ hasura-deploy-v1:
 run-migrate-hasura:
 	docker-compose run graphql-engine /root/migrate_hasura.sh
 run-warmup-apprunner:
-	docker run --rm -it haydenjeune/wrk2:latest -t4 -c500 -d100s -R5500 --latency $(WARMUP_HEALTH_ENDPOINT_URL)?sleep=100000
+	docker run --rm -it haydenjeune/wrk2:latest -t4 -c1000 -d100s -R15000 --latency $(WARMUP_HEALTH_ENDPOINT_URL)?sleep=100000
 run-graphql-benchmark:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
 run-graphql-benchmark-readonly:
@@ -77,8 +79,11 @@ go.run.proxy-benchmark:
 	export GOMAXPROCS=8; cd ./example/benchmark/proxy/;go run .
 python.run.scripting-server:
 	cd ./src/scripting/;python3 server.py
-
-test.graphql-engine-plus:
+test.graphql-engine-plus.query:
+	# fire a curl request to graphql-engine-plus
+	#@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1readonly
+test.graphql-engine-plus.mutation:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation MyMutation { quickinsert_customer_one(object: {first_name: \"test\", external_ref_list: []}) { id first_name created_at } } "}' http://localhost:8000/public/graphql/v1

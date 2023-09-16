@@ -33,7 +33,7 @@ queries:
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 500000
-    connections: 500
+    connections: 1000
     query: |
       query MyQuery {
         customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
@@ -50,7 +50,7 @@ queries:
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 20000
-    connections: 500
+    connections: 1000
     query: |
       query MyQuery {
         customer(limit: 7000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
@@ -67,7 +67,7 @@ queries:
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 10000
-    connections: 500
+    connections: 1000
     query: |
       query MyQuery {
         customer(offset: 500000, limit: 100) {
