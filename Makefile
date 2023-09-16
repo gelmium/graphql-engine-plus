@@ -65,9 +65,10 @@ clean:  ## clean up build artifacts
 	rm -rf ./dist ./build
 	rm -f .*.out *.out
 
+HASURA_VERSION := v2.33.4
 build.graphql-engine-plus:
 	cd ./src/;go mod tidy
-	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
+	docker build --build-arg="HASURA_GRAPHQL_ENGINE_VERSION=$(HASURA_VERSION)" --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
 build.graphql-engine-plus-nginx:
 	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):nginx-latest -f nginx.Dockerfile ./src
 build.example-runner:
@@ -81,7 +82,7 @@ python.run.scripting-server:
 	cd ./src/scripting/;python3 server.py
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus
-	#@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1readonly
 test.graphql-engine-plus.mutation:
 	# fire a curl request to graphql-engine-plus

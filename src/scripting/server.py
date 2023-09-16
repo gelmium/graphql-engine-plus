@@ -275,7 +275,7 @@ async def healthcheck_graphql_engine(request: web.Request):
     async with aiohttp.ClientSession() as http_session:
         try:
             async with http_session.get(
-                "http://localhost:8881/healthz?strict=true", timeout=3
+                "http://localhost:8881/healthz?strict=true", timeout=5
             ) as resp:
                 # extract the response status code and body
                 result["primary"] = {"status": resp.status, "body": await resp.text()}
@@ -284,7 +284,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                 and "replica" not in not_include
             ):
                 async with http_session.get(
-                    "http://localhost:8880/healthz", timeout=3
+                    "http://localhost:8880/healthz", timeout=5
                 ) as resp:
                     # extract the response status code and body
                     result["replica"] = {

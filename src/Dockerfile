@@ -1,3 +1,4 @@
+ARG HASURA_GRAPHQL_ENGINE_VERSION
 # Use the official Go image as the base image
 FROM golang:alpine AS base
 # Set the working directory inside the container
@@ -15,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
     --mount=type=bind,target=. \
     go build -o /bin/server .
 
-FROM hasura/graphql-engine:v2.32.1 AS server
+FROM hasura/graphql-engine:${HASURA_GRAPHQL_ENGINE_VERSION} AS server
 WORKDIR /graphql-engine
 
 # install python and pip
@@ -37,4 +38,4 @@ COPY --from=build-server /bin/server /bin/
 CMD ["/bin/server"]
 
 # Add healthcheck
-HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:8888/health/engine || exit 1
+HEALTHCHECK --interval=30s --timeout=3s CMD curl --fail http://localhost:8000/health || exit 1

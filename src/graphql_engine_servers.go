@@ -208,15 +208,30 @@ func StartGraphqlEngineServers(
 			wg.Wait()
 			// check error from all cmds
 			errString := ""
-			for _, cmd := range cmds {
+			for idx, cmd := range cmds {
 				if cmd.ProcessState != nil {
-					// concat the args to get the process name
-					processName := strings.Join(cmd.Args[:min(len(cmd.Args), 4)], " ")
+					// use idx to set the process name
+					processName := "-"
+					switch idx {
+					case 0:
+						processName = "scripting-server"
+					case 1:
+						processName = "graphql-engine:primary"
+					case 2:
+						processName = "graphql-engine:replica"
+					}
 					if cmd.ProcessState.Exited() {
 						log.Info("Process exited successfully [" + processName + "]")
 					} else {
-						log.Info("Process exited with error " + cmd.ProcessState.String() + " [" + processName + "]")
-						errString += cmd.ProcessState.String() + " [" + processName + "]\n"
+						if idx < 2 {
+							// if the process is scripting-server or graphql-engine:primary
+							// then we need to capture the error
+							log.Error("Process exited with error " + cmd.ProcessState.String() + " [" + processName + "]")
+							errString += cmd.ProcessState.String() + " [" + processName + "]\n"
+						} else {
+							// for the replica, we dont care if it is exited with error
+							log.Warn("Process exited with warning " + cmd.ProcessState.String() + " [" + processName + "]")
+						}
 					}
 				}
 			}

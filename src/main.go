@@ -100,8 +100,15 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 			return c.SendStatus(fiber.StatusOK)
 			// Or we can wait for startupCtx to be done here: <-startupCtx.Done()
 		}
-		// fire GET request to scripting server to do full healthcheck of all engines
-		agent := fiber.Get("http://localhost:8888/health/engine")
+		var agent *fiber.Agent
+		if startupReadonlyCtx.Err() == nil {
+			// fire GET request to scripting server to do healthcheck of
+			// only primary engine, as replica engine is not yet ready
+			agent = fiber.Get("http://localhost:8888/health/engine?not=replica")
+		} else {
+			// fire GET request to scripting server to do full healthcheck of all engines
+			agent = fiber.Get("http://localhost:8888/health/engine")
+		}
 		if err := agent.Parse(); err != nil {
 			log.Error(err)
 		}
@@ -223,12 +230,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 		// if randomInt is less than primaryWeight, send request to primary upstream
 		// if replica is not available, always send request to primary upstream
 		if startupReadonlyCtx.Err() == nil || primaryVsReplicaWeight >= 100 || (primaryVsReplicaWeight > 0 && rand.Intn(100) < primaryVsReplicaWeight) {
-			// log.Debug("send request to primary upstream")
 			agent := fiber.Post("http://localhost:8881/v1/graphql")
 			// send query request to primary upstream
 			return sendRequestToUpstream(c, agent)
 		} else {
-			// log.Debug("send request to replica upstream")
 			// fire a POST request to the upstream url using the same header and body from the original request
 			agent := fiber.Post("http://localhost:8880/v1/graphql")
 			// send query request to replica upstream
