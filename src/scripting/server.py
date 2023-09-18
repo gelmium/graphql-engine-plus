@@ -37,6 +37,8 @@ logger = logging.getLogger("scripting-server")
 json_encoder = msgspec.json.Encoder()
 json_decoder = msgspec.json.Decoder()
 
+def backoff_retry(i):
+    return 0.1 * i + random.random() * (3.0 + 0.3 * i)
 
 async def exec_script(request: web.Request, body):
     # remote execution via proxy
@@ -61,40 +63,47 @@ async def exec_script(request: web.Request, body):
         async with aiohttp.ClientSession() as http_session:
             max_retries = int(body.get("execproxy_max_retries", 15))
             for i in range(1, max_retries + 1):
-                async with http_session.post(
-                    execproxy, data=req_body, headers=req_headers
-                ) as resp:
-                    text_body = await resp.text()
-                    # check if the response is 200
-                    if resp.status == 200:
-                        try:
-                            body["payload"] = json_decoder.decode(text_body)
-                        except msgspec.DecodeError:
-                            body["payload"] = text_body
-                        break
-                    elif resp.status == 429:
-                        # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
-                        # extract the "Retry-After" header
-                        retry_after = resp.headers.get("Retry-After")
-                        if retry_after:
-                            retry_after = min(float(retry_after), 29.0)
+                try:
+                    async with http_session.post(
+                        execproxy, data=req_body, headers=req_headers
+                    ) as resp:
+                        text_body = await resp.text()
+                        # check if the response is 200
+                        if resp.status == 200:
+                            try:
+                                body["payload"] = json_decoder.decode(text_body)
+                            except msgspec.DecodeError:
+                                body["payload"] = text_body
+                            break
+                        elif resp.status == 429:
+                            # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
+                            # extract the "Retry-After" header
+                            retry_after = resp.headers.get("Retry-After")
+                            if retry_after:
+                                retry_after = min(float(retry_after), 29.0)
+                            else:
+                                retry_after = backoff_retry(i)
+                            logger.info(
+                                f"Rate limited by App Runner, retrying after {retry_after} seconds"
+                            )
+                            body["status_code"] = 429
+                            # retry after advised/random seconds
+                            await asyncio.sleep(retry_after)
+                            continue
                         else:
-                            retry_after = 0.1 * i + random.random() * (3.0 + 0.3 * i)
-                        logger.info(
-                            f"Rate limited by App Runner, retrying after {retry_after} seconds"
-                        )
-                        body["status_code"] = 429
-                        # retry after advised/random seconds
-                        await asyncio.sleep(retry_after)
-                        continue
-                    else:
-                        logger.error(
-                            f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}"
-                        )
-                        body["status_code"] = resp.status
-                        raise Exception(
-                            f"Error status={resp.status} in forwarding the request to {resp.url}"
-                        )
+                            logger.error(
+                                f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}"
+                            )
+                            body["status_code"] = resp.status
+                            raise Exception(
+                                f"Error status={resp.status} in forwarding the request to {resp.url}"
+                            )
+                except (aiohttp.ClientOSError, aiohttp.ClientConnectorError) as e:
+                    # these are retryable errors, auto retry right away
+                    await asyncio.sleep(backoff_retry(i))
+                    logger.error(
+                        f"Got {e.__class__.__name__} (tries: {i}) while forwarding the request to {execproxy}: {e.strerror}"
+                    )
             else:
                 raise Exception(
                     f"Max retries exceeded ({max_retries}) when forwarding the request to {execproxy}"
@@ -104,7 +113,7 @@ async def exec_script(request: web.Request, body):
         # with the result of execution from execproxy
         return
     # local script execution
-    exec_main_func = None
+    exec_main_func = None   
     execfile = body.get("execfile")
     if execfile:
         exec_main_func = exec_cache.get(execfile)

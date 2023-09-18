@@ -172,27 +172,33 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 	})
 
 	// get the PATH from environment variable
-	var metadataPath = os.Getenv("ENGINE_PLUS_METADATA_PATH")
-	// default to /public/metadata/v1 if the env is not set
-	if metadataPath == "" {
-		metadataPath = "/public/metadata/"
+	var engineMetaPath = os.Getenv("ENGINE_PLUS_META_PATH")
+	// default to /public/meta/ if the env is not set
+	if engineMetaPath == "" {
+		engineMetaPath = "/public/meta/"
 	}
 	// check if metadataPath end with /
 	// if not, add / to the end of metadataPath.
-	if metadataPath[len(metadataPath)-1:] != "/" {
-		metadataPath = metadataPath + "/"
+	if engineMetaPath[len(engineMetaPath)-1:] != "/" {
+		engineMetaPath = engineMetaPath + "/"
 	}
 	// add a POST endpoint to forward request to an upstream url
-	app.Post(metadataPath+"+", func(c *fiber.Ctx) error {
+	app.Post(engineMetaPath+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
 		// fire a POST request to the upstream url using the same header and body from the original request
+		// any path after /public/meta/ will be appended to the upstream url
+		// allow any type of request to be sent to the hasura graphql engine
+		// for ex: /public/meta/v1/metadata -> /v1/metadata
+		// for ex: /public/meta/v2/query -> /v2/query
+		// for ex: /public/meta/v1/version -> /v1/version
+		// read more here: https://hasura.io/docs/latest/api-reference/overview/
 		agent := fiber.Post("http://localhost:8881/" + c.Params("+"))
 		// send request to upstream without caching
 		return sendRequestToUpstream(c, agent)
 	})
 	// add a GET endpoint to forward request to an upstream url
-	app.Get(metadataPath+"+", func(c *fiber.Ctx) error {
+	app.Get(engineMetaPath+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
 		// fire a POST request to the upstream url using the same header and body from the original request
@@ -270,7 +276,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 func main() {
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
-	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
+	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
 	app := setupFiber(startupCtx, startupReadonlyCtx)
 	// get the server Host:Port from environment variable
 	var serverHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")

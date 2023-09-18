@@ -71,9 +71,10 @@ async def main(request: web.Request, body):
             # and batch write it to dynamodb
             objects_batch = await r.rpop(sync_queue_name, BATCH_SIZE)
             if objects_batch:
+                # TODO: handle failure of batch write, send to dead letter queue
                 table = await boto3_dynamodb.Table(table_name)
                 async with table.batch_writer() as dynamo_writer:
-                    for object_data_json_str in objects_batch:
+                    for object_data_json_str in list(set(objects_batch)):
                         object_data = json_decoder.decode(object_data_json_str)
                         logger.info(
                             f"Batch write object.id={object_data['id']} into table `{table_name}`"
