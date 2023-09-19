@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"net"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/redis/go-redis/v9"
 	"github.com/valyala/fasthttp"
 )
 
@@ -107,7 +110,40 @@ func processProxyResponse(resp *fasthttp.Response) {
 	// do not proxy "Connection" header
 	resp.Header.Del("Connection")
 	// strip other unneeded headers
-	// alter other response data if needed
+}
+
+var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type)$`)
+
+func calculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) uint64 {
+	// calculate the hash of the request using
+	// the GraphQL query
+	// the GraphQL operation name
+	// the GraphQL variables of the query
+	// request headers
+	h := fnv.New64a()
+	h.Write([]byte(graphqlReq.Query))
+	h.Write([]byte(graphqlReq.OperationName))
+	h.Write([]byte(fmt.Sprint(graphqlReq.Variables)))
+	// loop through the header from the original request
+	// and add it to the hash
+	for k, v := range c.GetReqHeaders() {
+		// filter out the header that we don't want to cache
+		// such as: Host, Connection, X-Forwarded-For
+		if notCacheHeaderRegex.MatchString(k) {
+			continue
+		}
+		if k == "Authorization" {
+			// TODO: read the JWT token from the request header Authorization
+			// add the user and role to the hash
+			continue
+		}
+		// print the header key and value
+		log.Info("Cache with headers ", k, ":", v)
+		h.Write([]byte(k))
+		h.Write([]byte(v))
+	}
+
+	return h.Sum64()
 }
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
@@ -209,6 +245,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 		if graphqlReq.IsSubscriptionGraphQLRequest() {
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
+		}
+
+		var cacheKey uint64
+		var ttl int
+		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 {
+			cacheKey = calculateCacheKey(c, graphqlReq)
+			log.Info("Cached query detected: ", cacheKey, ttl)
 		}
 		req := c.Request()
 		resp := c.Response()
@@ -338,10 +381,42 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 	return app
 }
 
+func setupRedisClient(ctx context.Context) redis.UniversalClient {
+	// setup redis client
+	var redisClient redis.UniversalClient
+	// reading clusterUrl from environment variable
+	clusterUrl := os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+	if clusterUrl != "" {
+		if clusterOpt, err := redis.ParseClusterURL(clusterUrl); err == nil {
+			clusterOpt.TLSConfig.InsecureSkipVerify = true
+			redisClient = redis.NewClusterClient(clusterOpt)
+		}
+	} else {
+		if opt, err := redis.ParseURL(os.Getenv("HASURA_GRAPHQL_REDIS_URL")); err == nil {
+			redisClient = redis.NewClient(opt)
+		}
+	}
+	// ping redis server
+	if redisClient != nil {
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			log.Error("Failed to connect to Redis: ", err)
+		}
+		if clusterUrl != "" {
+			log.Info("Connected to Redis Cluster Server")
+		} else {
+			log.Info("Connected to Redis Server")
+		}
+	}
+	return redisClient
+}
+
 func main() {
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
+	// setup resources
+	redisClient := setupRedisClient(mainCtx)
+	// setup app
 	app := setupFiber(startupCtx, startupReadonlyCtx)
 	// get the server Host:Port from environment variable
 	var serverHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")
@@ -353,7 +428,7 @@ func main() {
 	}
 	// start the http server
 	go app.Listen(serverHost + ":" + serverPort)
-
+	// start the engine servers
 	serverShutdownErrorChanel := make(chan error)
 	startServerCtx, startServerCtxCancelFn := context.WithCancel(mainCtx)
 	go StartGraphqlEngineServers(startServerCtx, mainCtxCancelFn, startupCtx, startupDoneFn, startupReadonlyCtx, startupReadonlyDoneFn, serverShutdownErrorChanel)
@@ -368,6 +443,9 @@ func main() {
 		},
 		"http-server": func(shutdownCtx context.Context) error {
 			return app.ShutdownWithTimeout(shutdownTimeout - 1*time.Second)
+		},
+		"redis-client": func(shutdownCtx context.Context) error {
+			return redisClient.Close()
 		},
 		// Add other cleanup operations here
 	})

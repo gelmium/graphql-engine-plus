@@ -36,8 +36,9 @@ hasura-deploy-v1:
 
 run-migrate-hasura:
 	docker-compose run graphql-engine /root/migrate_hasura.sh
+N := 1000
 run-warmup-apprunner:
-	docker run --rm -it haydenjeune/wrk2:latest -t4 -c1000 -d100s -R15000 --latency $(WARMUP_HEALTH_ENDPOINT_URL)?sleep=100000
+	docker run --rm -it haydenjeune/wrk2:latest -t4 -c$(N) -d100s -R$(shell expr 10 \* $(N) + 100 ) --latency $(WARMUP_HEALTH_ENDPOINT_URL)?sleep=100000
 run-graphql-benchmark:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
 run-graphql-benchmark-readonly:

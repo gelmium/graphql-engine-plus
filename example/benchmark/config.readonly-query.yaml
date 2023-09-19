@@ -67,7 +67,7 @@ queries:
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
     requests: 10000
-    connections: 1000
+    connections: 200
     query: |
       query MyQuery {
         customer(offset: 500000, limit: 100) {
