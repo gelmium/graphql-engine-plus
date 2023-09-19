@@ -29,6 +29,55 @@ queries:
   #     - duration: 10s
   #       target: 1000
   # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
+  - name: List-Customer-Cached
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 500000
+    connections: 1000
+    query: |
+      query MyQuery @cached(ttl: 60) {
+        customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
+        }
+      }
+  - name: List-Customer-Large-Batch-Cached
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 20000
+    connections: 1000
+    query: |
+      query MyQuery @cached(refresh: false) {
+        customer(limit: 7000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
+        }
+      }
+  - name: List-Customer-Slow-Query-Cached
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 10000
+    connections: 1000
+    query: |
+      query MyQuery @cached {
+        customer(offset: 500000, limit: 100) {
+          id
+          last_name
+          created_at
+          first_name
+          updated_at
+        }
+      }
   - name: List-Customer
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER

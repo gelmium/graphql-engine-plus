@@ -28,7 +28,7 @@ func ParseGraphQLRequest(c *fiber.Ctx) (*GraphQLRequest, error) {
 
 var mutationRegex = regexp.MustCompile(`(?i)^\s*mutation\W`)
 var subscriptionRegex = regexp.MustCompile(`(?i)^\s*subscription\W`)
-var cachedQueryRegex = regexp.MustCompile(`(?i)^\s*query\W+\w*\s*@cached`)
+var cachedQueryRegex = regexp.MustCompile(`(?i)^\s*query\W+\w*.*\s*@cached`)
 var cachedParamsRegex = regexp.MustCompile(`@cached\((ttl|refresh)\s*:\s*(\d+|true)\)`)
 
 func (req *GraphQLRequest) IsMutationGraphQLRequest() bool {
@@ -45,6 +45,9 @@ func (req *GraphQLRequest) IsSubscriptionGraphQLRequest() bool {
 // return -1 if the query is a cached query with indefinite ttl
 // return ttl (seconds) if the query is a cached query with ttl.
 func (req *GraphQLRequest) IsCachedQueryGraphQLRequest() int {
+	// according to hasura docs
+	// max ttl allowed value is 300 seconds
+	maxTTL := 300
 	// check if the query is a subscription with regex
 	if cachedQueryRegex.MatchString(req.Query) {
 		match := cachedParamsRegex.FindStringSubmatch(req.Query)
@@ -55,13 +58,16 @@ func (req *GraphQLRequest) IsCachedQueryGraphQLRequest() int {
 			if match[1] == "ttl" {
 				// convert string match[1] to int
 				if ttl, err := strconv.Atoi(match[2]); err == nil {
+					if ttl > maxTTL {
+						return maxTTL
+					}
 					return ttl
 				}
 			} else if match[1] == "refresh" && match[2] == "true" {
 				return 0
 			}
 		}
-		return -1
+		return maxTTL
 	}
 	return 0
 }

@@ -1,5 +1,5 @@
-github.com/gelmium/graceful-shutdown v0.0.2 h1:E3LCRwJKalz+vCA0YGr5Zf5zTm5ejDkwUJz2RWpxeKo=
-github.com/gelmium/graceful-shutdown v0.0.2/go.mod h1:Mrje9A4VYcCOkbiF5KZ4o5gCd2OH3fGkwGIzWvDnMsI=
+github.com/gelmium/graceful-shutdown v0.0.10-beta.d9cf57f h1:tp2Q0fDNxSr+EUURg2Cie3cjSsEPhWNezBlMdDrisF0=
+github.com/gelmium/graceful-shutdown v0.0.10-beta.d9cf57f/go.mod h1:Mrje9A4VYcCOkbiF5KZ4o5gCd2OH3fGkwGIzWvDnMsI=
 github.com/philhofer/fwd v1.1.2/go.mod h1:qkPdfjR2SIEbspLqpe1tO4n5yICnr2DY7mqEx2tUTP0=
 github.com/tinylib/msgp v1.1.8/go.mod h1:qkpG+2ldGg4xRFmx+jfTvZPxfGFhi64BcnL9vkCm/Tw=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
