@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import traceback
+import argparse
 import aiohttp
 from aiohttp import web
 from aiohttp.abc import AbstractAccessLogger
@@ -37,8 +38,10 @@ logger = logging.getLogger("scripting-server")
 json_encoder = msgspec.json.Encoder()
 json_decoder = msgspec.json.Decoder()
 
+
 def backoff_retry(i):
     return 0.1 * i + random.random() * (3.0 + 0.3 * i)
+
 
 async def exec_script(request: web.Request, body):
     # remote execution via proxy
@@ -113,7 +116,7 @@ async def exec_script(request: web.Request, body):
         # with the result of execution from execproxy
         return
     # local script execution
-    exec_main_func = None   
+    exec_main_func = None
     execfile = body.get("execfile")
     if execfile:
         exec_main_func = exec_cache.get(execfile)
@@ -447,12 +450,17 @@ class AccessLogger(AbstractAccessLogger):
         )
 
 
+parser = argparse.ArgumentParser(description="aiohttp scripting server")
+parser.add_argument("--path")
+parser.add_argument("--port")
+
 if __name__ == "__main__":
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    args = parser.parse_args()
     web.run_app(
         get_app(),
-        host="127.0.0.1",
-        port=int(sys.argv[1]) if len(sys.argv) > 1 else 8888,
+        path=args.path,
+        port=args.port,
         access_log_class=AccessLogger,
     )
     # try to cancel any running async tasks

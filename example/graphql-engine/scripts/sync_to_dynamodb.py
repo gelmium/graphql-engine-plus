@@ -61,8 +61,6 @@ async def main(request: web.Request, body):
     if action == "INSERT" or action == "UPDATE" or action == "MANUAL":
         object_data = payload["event"]["data"]["new"]
         convert_timestamp_fields_of_object_to_epoch(object_data)
-        # set TTL to 7 days (dynamodb uses epoch in seconds)
-        object_data["ttl"] = int(time.time()) + 7 * 24 * 60 * 60
         # push it to start of the queue
         queue_len = await r.lpush(sync_queue_name, json_encoder.encode(object_data))
         # check if the queue is full and process it
@@ -79,6 +77,8 @@ async def main(request: web.Request, body):
                         logger.info(
                             f"Batch write object.id={object_data['id']} into table `{table_name}`"
                         )
+                        # set TTL to 7 days (dynamodb uses epoch in seconds)
+                        object_data["ttl"] = int(time.time()) + 7 * 24 * 60 * 60
                         await dynamo_writer.put_item(Item=object_data)
         body["payload"] = object_data
     elif action == "DELETE":

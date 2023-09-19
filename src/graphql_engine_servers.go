@@ -59,8 +59,8 @@ func StartGraphqlEngineServers(
 	// create a waitgroup to wait for all cmds to finish
 	var wg sync.WaitGroup
 	// start scripting server at port 8888
-	log.Info("Starting scripting-server at port 8888")
-	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py")
+	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8888")
+	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8888")
 	// route the output to stdout
 	cmd0.Stdout = os.Stdout
 	// override the cancel function to send sigterm instead of kill

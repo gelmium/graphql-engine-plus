@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"math/rand"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -12,8 +13,8 @@ import (
 	gfshutdown "github.com/gelmium/graceful-shutdown"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
-	"github.com/gofiber/fiber/v2/middleware/compress"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/valyala/fasthttp"
 )
 
 // App Runner will always timeout after 120 seconds
@@ -55,16 +56,58 @@ func sendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
 	}
 	code, body, errs := agent.Bytes()
 	if len(errs) > 0 {
-		log.Error(errs)
 		// check if error is timeout
 		if errs[0].Error() == "timeout" {
 			return c.Status(504).SendString("Upstream GraphQL Engine Timeout")
 		}
+		// log unhandled error and return 500
+		log.Error(errs)
 		return c.Status(500).SendString("Internal Server Error")
 	}
 	// return the response from the upstream url
 	c.Set("Content-Type", "application/json")
 	return c.Status(code).Send(body)
+}
+
+var primaryEngineServerProxyClient = &fasthttp.HostClient{
+	Addr: "localhost:8881",
+}
+var replicaEngineServerProxyClient = &fasthttp.HostClient{
+	Addr: "localhost:8880",
+}
+
+var scriptingServerProxyClient = &fasthttp.HostClient{
+	Addr: "/tmp/scripting.sock",
+	Dial: func(addr string) (net.Conn, error) {
+		// Dial a Unix socket at path addr
+		return net.DialUnix("unix", nil, &net.UnixAddr{
+			Name: addr,
+			Net:  "unix",
+		})
+	},
+	// set other options here if required - most notably timeouts.
+}
+
+func prepareProxyRequest(req *fasthttp.Request, upstreamHost string, upstreamPath string, clientIpAddress string) {
+	// do not proxy "Connection" header.
+	req.Header.Del("Connection")
+	// strip other unneeded headers.
+	req.SetHost(upstreamHost)
+	if upstreamPath != "" {
+		req.SetRequestURI("http://" + upstreamHost + upstreamPath)
+	}
+	// alter other request params before sending them to upstream host
+	if clientIpAddress != "" {
+		// add client ip address to X-Forwarded-For header
+		req.Header.Add("X-Forwarded-For", clientIpAddress)
+	}
+}
+
+func processProxyResponse(resp *fasthttp.Response) {
+	// do not proxy "Connection" header
+	resp.Header.Del("Connection")
+	// strip other unneeded headers
+	// alter other response data if needed
 }
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
@@ -82,10 +125,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 		TimeFormat: "2006-01-02T15:04:05.000000",
 	}))
 
-	// Compress middleware
-	app.Use(compress.New(compress.Config{
-		Level: compress.LevelBestSpeed, // 1
-	}))
+	// Compress middleware, we dont need to use this
+	// as GraphQL Engine already compress the response
+	// however, it only support gzip compression
+	// enable this will allow us to support deflate and brotli compression as well
+	// app.Use(compress.New(compress.Config{
+	// 	Level: compress.LevelBestSpeed, // 1
+	// }))
 
 	// get the HEALTH_CHECK_PATH from environment variable
 	var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
@@ -164,11 +210,16 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
-
-		// fire a POST request to the upstream url using the same header and body from the original request
-		agent := fiber.Post("http://localhost:8881/v1/graphql")
-		// send mutation request to primary upstream
-		return sendRequestToUpstream(c, agent)
+		req := c.Request()
+		resp := c.Response()
+		// prepare the proxy request
+		prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
+		if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
+			log.Error("Error when proxying the request to primary engine:", err)
+		}
+		// process the proxy response
+		processProxyResponse(resp)
+		return err
 	})
 
 	// get the PATH from environment variable
@@ -191,7 +242,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 		// allow any type of request to be sent to the hasura graphql engine
 		// for ex: /public/meta/v1/metadata -> /v1/metadata
 		// for ex: /public/meta/v2/query -> /v2/query
-		// for ex: /public/meta/v1/version -> /v1/version
 		// read more here: https://hasura.io/docs/latest/api-reference/overview/
 		agent := fiber.Post("http://localhost:8881/" + c.Params("+"))
 		// send request to upstream without caching
@@ -201,7 +251,8 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 	app.Get(engineMetaPath+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
-		// fire a POST request to the upstream url using the same header and body from the original request
+		// for ex: GET /public/meta/v1/version -> /v1/version
+		// fire a GET request to the upstream url using the same header and body from the original request
 		agent := fiber.Get("http://localhost:8881/" + c.Params("+"))
 		// send request to upstream without caching
 		return sendRequestToUpstream(c, agent)
@@ -231,20 +282,27 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
-
+		req := c.Request()
+		resp := c.Response()
 		// random an int from 0 to 99
 		// if randomInt is less than primaryWeight, send request to primary upstream
 		// if replica is not available, always send request to primary upstream
 		if startupReadonlyCtx.Err() == nil || primaryVsReplicaWeight >= 100 || (primaryVsReplicaWeight > 0 && rand.Intn(100) < primaryVsReplicaWeight) {
-			agent := fiber.Post("http://localhost:8881/v1/graphql")
-			// send query request to primary upstream
-			return sendRequestToUpstream(c, agent)
+			// prepare the proxy request to primary upstream
+			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
+			if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
+				log.Error("Error when proxying the request to primary engine:", err)
+			}
 		} else {
-			// fire a POST request to the upstream url using the same header and body from the original request
-			agent := fiber.Post("http://localhost:8880/v1/graphql")
-			// send query request to replica upstream
-			return sendRequestToUpstream(c, agent)
+			// prepare the proxy request to replica upstream
+			prepareProxyRequest(req, "localhost:8880", "/v1/graphql", c.IP())
+			if err = replicaEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
+				log.Error("Error when proxying the request to replica engine:", err)
+			}
 		}
+		// process the proxy response
+		processProxyResponse(resp)
+		return err
 	})
 
 	// get the PATH from environment variable
@@ -264,10 +322,17 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context) 
 			}
 			// check and wait for startupCtx to be done
 			waitForStartupToBeCompleted(startupCtx)
-			// fire a POST request to the upstream url using the same header and body from the original request
-			agent := fiber.Post("http://localhost:8888/execute")
-			// send request to upstream without caching
-			return sendRequestToUpstream(c, agent)
+			req := c.Request()
+			resp := c.Response()
+			// prepare the proxy request
+			prepareProxyRequest(req, "localhost:8888", "/execute", c.IP())
+			err := scriptingServerProxyClient.Do(req, resp)
+			if err != nil {
+				log.Error("Error when proxying the request to scripting server:", err)
+			}
+			// process the proxy response
+			processProxyResponse(resp)
+			return err
 		})
 	}
 	return app
@@ -306,6 +371,7 @@ func main() {
 		},
 		// Add other cleanup operations here
 	})
+	exitCode := <-wait
 	log.Info("GraphQL Engine Plus is shutdown")
-	os.Exit(<-wait)
+	os.Exit(exitCode)
 }
