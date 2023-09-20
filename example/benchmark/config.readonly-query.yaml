@@ -45,7 +45,7 @@ queries:
   - name: List-Customer-Large-Batch-Cached
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 20000
+    requests: 150000
     connections: 1000
     query: |
       query MyQuery @cached(refresh: false) {
@@ -62,7 +62,7 @@ queries:
   - name: List-Customer-Slow-Query-Cached
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 10000
+    requests: 500000
     connections: 1000
     query: |
       query MyQuery @cached {
@@ -74,48 +74,48 @@ queries:
           updated_at
         }
       }
-  # - name: List-Customer
-  #   tools: [k6]
-  #   execution_strategy: FIXED_REQUEST_NUMBER
-  #   requests: 500000
-  #   connections: 1000
-  #   query: |
-  #     query MyQuery {
-  #       customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-  #         id
-  #         last_name
-  #         first_name
-  #       }
-  #     }
-  # - name: List-Customer-Large-Batch
-  #   tools: [k6]
-  #   execution_strategy: FIXED_REQUEST_NUMBER
-  #   requests: 20000
-  #   connections: 1000
-  #   query: |
-  #     query MyQuery {
-  #       customer(limit: 7000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-  #         id
-  #         last_name
-  #         external_ref_list
-  #         date_of_birth
-  #         created_at
-  #         first_name
-  #         updated_at
-  #       }
-  #     }
-  # - name: List-Customer-Slow-Query
-  #   tools: [k6]
-  #   execution_strategy: FIXED_REQUEST_NUMBER
-  #   requests: 10000
-  #   connections: 200
-  #   query: |
-  #     query MyQuery {
-  #       customer(offset: 750000, limit: 25) {
-  #         id
-  #         last_name
-  #         created_at
-  #         first_name
-  #         updated_at
-  #       }
-  #     }
+  - name: List-Customer
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 500000
+    connections: 1000
+    query: |
+      query MyQuery {
+        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          first_name
+        }
+      }
+  - name: List-Customer-Large-Batch
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 20000
+    connections: 1000
+    query: |
+      query MyQuery {
+        customer(limit: 7000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          external_ref_list
+          date_of_birth
+          created_at
+          first_name
+          updated_at
+        }
+      }
+  - name: List-Customer-Slow-Query
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 10000
+    connections: 200
+    query: |
+      query MyQuery {
+        customer(offset: 750000, limit: 25) {
+          id
+          last_name
+          created_at
+          first_name
+          updated_at
+        }
+      }

@@ -3,15 +3,11 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"hash/fnv"
 	"math/rand"
 	"net"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	gfshutdown "github.com/gelmium/graceful-shutdown"
@@ -75,19 +71,6 @@ func sendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
 	return c.Status(code).Send(body)
 }
 
-func sendCachedResponseBody(c *fiber.Ctx, redisCachedResponseBody []byte, ttl int, familyCacheKey uint64, cacheKey uint64) error {
-	c.Set("Content-Type", "application/json")
-	// check if Accept-Encoding in request header contain gzip
-	// if yes, set the Content-Encoding to gzip
-	if strings.Contains(c.Get("Accept-Encoding"), "gzip") {
-		c.Set("Content-Encoding", "gzip")
-	}
-	c.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
-	c.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
-	c.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
-	return c.Status(200).Send(redisCachedResponseBody)
-}
-
 var primaryEngineServerProxyClient = &fasthttp.HostClient{
 	Addr: "localhost:8881",
 }
@@ -107,10 +90,6 @@ var scriptingServerProxyClient = &fasthttp.HostClient{
 	// set other options here if required - most notably timeouts.
 }
 
-func createRedisKey(familyKey uint64, cacheKey uint64) string {
-	return "graphql-engine-plus:" + strconv.FormatUint(familyKey, 36) + ":" + strconv.FormatUint(cacheKey, 36)
-}
-
 func prepareProxyRequest(req *fasthttp.Request, upstreamHost string, upstreamPath string, clientIpAddress string) {
 	// do not proxy "Connection" header.
 	req.Header.Del("Connection")
@@ -126,60 +105,13 @@ func prepareProxyRequest(req *fasthttp.Request, upstreamHost string, upstreamPat
 	}
 }
 
-func processProxyResponse(ctx context.Context, resp *fasthttp.Response, ttl int, redisKey string, redisClient redis.UniversalClient) {
+func processProxyResponse(ctx context.Context, resp *fasthttp.Response, redisClient redis.UniversalClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// do not proxy "Connection" header
 	resp.Header.Del("Connection")
 	// strip other unneeded headers
-	if ttl != 0 && redisKey != "" && resp.StatusCode() == 200 && redisClient != nil {
-		// read the response body and store it in redis
-		redisClient.Set(ctx, redisKey, resp.Body(), time.Duration(ttl)*time.Second)
-		// resp.Header.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
-		// resp.Header.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
-		resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
+	if ttl != 0 && cacheKey > 0 && resp.StatusCode() == 200 && redisClient != nil {
+		ReadResponseBodyAndSaveToCache(ctx, resp, redisClient, ttl, familyCacheKey, cacheKey)
 	}
-}
-
-var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type|X-Envoy-External-Address|X-Envoy-Expected-Rq-Timeout-Ms)$`)
-
-func calculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64) {
-	// calculate the hash of the request using
-	// the GraphQL query
-	// the GraphQL operation name
-	// the GraphQL variables of the query
-	// request headers
-	h := fnv.New64a()
-	h.Write([]byte(graphqlReq.Query))
-	h.Write([]byte(graphqlReq.OperationName))
-	// loop through the header from the original request
-	// and add it to the hash
-	headers := []string{}
-	for k, v := range c.GetReqHeaders() {
-		// filter out the header that we don't want to cache
-		// such as: Host, Connection, ...
-		if notCacheHeaderRegex.MatchString(k) {
-			continue
-		}
-		if k == "Authorization" {
-			// TODO: read the JWT token from the request header Authorization
-			// add the user and role to the hash
-			continue
-		}
-		// print the header key and value
-		header := k + ":" + v
-		log.Debug("Cache with headers ", header)
-		headers = append(headers, header)
-	}
-	// sort the header key and value
-	// to make sure that the hash is always the same
-	// even if the header key and value is not in the same order
-	sort.Strings(headers)
-	for _, header := range headers {
-		h.Write([]byte(header))
-	}
-	familyCacheKey := h.Sum64()
-	h.Write([]byte(fmt.Sprint(graphqlReq.Variables)))
-	cacheKey := h.Sum64()
-	return familyCacheKey, cacheKey
 }
 
 var JsoniterConfigFastest = jsoniter.Config{
@@ -293,13 +225,17 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		}
 		var redisKey string
 		var ttl int
+		var familyCacheKey, cacheKey uint64
 		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisClient != nil {
-			familyCacheKey, cacheKey := calculateCacheKey(c, graphqlReq)
+			familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
-			redisKey = createRedisKey(familyCacheKey, cacheKey)
-			if redisCachedResponseBody, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
-				return sendCachedResponseBody(c, redisCachedResponseBody, ttl, familyCacheKey, cacheKey)
+			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
+			if cacheData, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
+				redisCachedResponseResult := CacheResponseRedis{}
+				if err := JsoniterConfigFastest.Unmarshal(cacheData, &redisCachedResponseResult); err == nil {
+					return SendCachedResponseBody(c, redisCachedResponseResult, ttl, familyCacheKey, cacheKey)
+				}
 			}
 		}
 		req := c.Request()
@@ -310,7 +246,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			log.Error("Error when proxying the request to primary engine:", err)
 		}
 		// process the proxy response
-		processProxyResponse(c.Context(), resp, ttl, redisKey, redisClient)
+		processProxyResponse(c.Context(), resp, redisClient, ttl, familyCacheKey, cacheKey)
 		return err
 	})
 
@@ -376,13 +312,17 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		}
 		var redisKey string
 		var ttl int
+		var familyCacheKey, cacheKey uint64
 		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisClient != nil {
-			familyCacheKey, cacheKey := calculateCacheKey(c, graphqlReq)
+			familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
-			redisKey = createRedisKey(familyCacheKey, cacheKey)
-			if redisCachedResponseBody, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
-				return sendCachedResponseBody(c, redisCachedResponseBody, ttl, familyCacheKey, cacheKey)
+			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
+			if cacheData, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
+				redisCachedResponseResult := CacheResponseRedis{}
+				if err := JsoniterConfigFastest.Unmarshal(cacheData, &redisCachedResponseResult); err == nil {
+					return SendCachedResponseBody(c, redisCachedResponseResult, ttl, familyCacheKey, cacheKey)
+				}
 			}
 		}
 		req := c.Request()
@@ -404,7 +344,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			}
 		}
 		// process the proxy response
-		processProxyResponse(c.Context(), resp, ttl, redisKey, redisClient)
+		processProxyResponse(c.Context(), resp, redisClient, ttl, familyCacheKey, cacheKey)
 		return err
 	})
 
@@ -434,7 +374,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 				log.Error("Error when proxying the request to scripting server:", err)
 			}
 			// process the proxy response
-			processProxyResponse(c.Context(), resp, 0, "", nil)
+			processProxyResponse(c.Context(), resp, nil, 0, 0, 0)
 			return err
 		})
 	}

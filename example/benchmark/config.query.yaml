@@ -73,9 +73,11 @@ queries:
         }
       }
   - name: List-Customer
+    # this List-Customer query is happening in parallel with the async create customer
+    # from Redis message stream worker trigged by QuickInsert-Customer
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 500000
     connections: 1000
     query: |
       query MyQuery {
@@ -87,7 +89,7 @@ queries:
       }
   - name: Create-Customer-Failed-Validation
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 500000
     connections: 1000
     tools: [k6]
     query: |
@@ -96,14 +98,14 @@ queries:
           id
         }
       }
-  - name: List-Customer-Cached
+  - name: List-Customer-2-Cached
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
+    requests: 500000
     connections: 1000
     query: |
       query MyQuery @cached {
-        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+        customer(limit: 2, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
           id
           last_name
           first_name
