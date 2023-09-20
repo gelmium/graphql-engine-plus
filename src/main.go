@@ -232,10 +232,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			if cacheData, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
-				redisCachedResponseResult := CacheResponseRedis{}
-				if err := JsoniterConfigFastest.Unmarshal(cacheData, &redisCachedResponseResult); err == nil {
-					return SendCachedResponseBody(c, redisCachedResponseResult, ttl, familyCacheKey, cacheKey)
-				}
+				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
 		req := c.Request()
@@ -319,10 +316,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			if cacheData, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
-				redisCachedResponseResult := CacheResponseRedis{}
-				if err := JsoniterConfigFastest.Unmarshal(cacheData, &redisCachedResponseResult); err == nil {
-					return SendCachedResponseBody(c, redisCachedResponseResult, ttl, familyCacheKey, cacheKey)
-				}
+				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
 		req := c.Request()
@@ -375,6 +369,11 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			}
 			// process the proxy response
 			processProxyResponse(c.Context(), resp, nil, 0, 0, 0)
+			// check if X-Request-ID is set in the response header
+			// if not, set it to the request id from the original request
+			if resp.Header.Peek("X-Request-ID") == nil {
+				resp.Header.Set("X-Request-ID", c.Get("X-Request-ID"))
+			}
 			return err
 		})
 	}

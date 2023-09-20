@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -16,13 +17,25 @@ import (
 )
 
 type CacheResponseRedis struct {
-	Body            []byte `json:"body"  redis:"body"`
+	// Body            []byte `json:"body"  redis:"body"`
 	ExpiresAt       int64  `json:"expires_at" redis:"expires_at"`
 	ContentType     string `json:"content_type" redis:"content_type"`
 	ContentEncoding string `json:"content_encoding" redis:"content_encoding"`
 }
 
-func SendCachedResponseBody(c *fiber.Ctx, redisCachedResponseResult CacheResponseRedis, ttl int, familyCacheKey uint64, cacheKey uint64) error {
+func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCacheKey uint64, cacheKey uint64) error {
+	// first 8 bytes of the cacheData is the length of the response body
+	// read the length of the response body
+	bodyLength := binary.LittleEndian.Uint64(cacheData[:8])
+	// read the response cacheBody
+	cacheBody := cacheData[8 : 8+bodyLength]
+	// read the response cacheMeta
+	redisCachedResponseResult := CacheResponseRedis{}
+	if err := JsoniterConfigFastest.Unmarshal(cacheData[8+bodyLength:], &redisCachedResponseResult); err != nil {
+		log.Error("Error when unmarshal cache meta: ", err)
+		return err
+	}
+	// set the response header
 	c.Set("Content-Type", redisCachedResponseResult.ContentType)
 	// check if Accept-Encoding in request header contain gzip
 	// if yes, set the Content-Encoding to gzip
@@ -37,21 +50,29 @@ func SendCachedResponseBody(c *fiber.Ctx, redisCachedResponseResult CacheRespons
 		maxAge = 0
 	}
 	c.Set("Cache-Control", "max-age="+strconv.FormatInt(maxAge, 10))
-	return c.Status(200).Send(redisCachedResponseResult.Body)
+	return c.Status(200).Send(cacheBody)
 }
 
 func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisClient redis.UniversalClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// read the response body and store it in redis
-	cacheData, err := JsoniterConfigFastest.Marshal(&CacheResponseRedis{
-		resp.Body(),
+	body := resp.Body()
+	// store the body length in the first 8 bytes
+	cacheData := make([]byte, 8)
+	binary.LittleEndian.PutUint64(cacheData, uint64(len(body)))
+	// then append the body
+	cacheData = append(cacheData, body...)
+	// then append the cache meta in json format
+	cacheMeta, err := JsoniterConfigFastest.Marshal(&CacheResponseRedis{
 		time.Now().Add(time.Duration(ttl) * time.Second).Unix(),
 		string(resp.Header.Peek("Content-Type")),
 		string(resp.Header.Peek("Content-Encoding")),
 	})
 	if err != nil {
-		log.Error("Error when marshal cache response: ", err)
+		log.Error("Error when marshal cache: ", err)
 		return
 	}
+	cacheData = append(cacheData, cacheMeta...)
+	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
 	if err := redisClient.Set(ctx, redisKey, cacheData, time.Duration(ttl)*time.Second).Err(); err != nil {
 		log.Error("Error when save cache to redis: ", err)
