@@ -36,14 +36,10 @@ queries:
     connections: 1000
     query: |
       query MyQuery @cached(ttl: 60) {
-        customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
           id
           last_name
-          external_ref_list
-          date_of_birth
-          created_at
           first_name
-          updated_at
         }
       }
   - name: List-Customer-Large-Batch-Cached
@@ -70,7 +66,7 @@ queries:
     connections: 1000
     query: |
       query MyQuery @cached {
-        customer(offset: 500000, limit: 100) {
+        customer(offset: 750000, limit: 25) {
           id
           last_name
           created_at
@@ -78,52 +74,48 @@ queries:
           updated_at
         }
       }
-  - name: List-Customer
-    tools: [k6]
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 500000
-    connections: 1000
-    query: |
-      query MyQuery {
-        customer(limit: 25, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-          id
-          last_name
-          external_ref_list
-          date_of_birth
-          created_at
-          first_name
-          updated_at
-        }
-      }
-  - name: List-Customer-Large-Batch
-    tools: [k6]
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 20000
-    connections: 1000
-    query: |
-      query MyQuery {
-        customer(limit: 7000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-          id
-          last_name
-          external_ref_list
-          date_of_birth
-          created_at
-          first_name
-          updated_at
-        }
-      }
-  - name: List-Customer-Slow-Query
-    tools: [k6]
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 10000
-    connections: 200
-    query: |
-      query MyQuery {
-        customer(offset: 500000, limit: 100) {
-          id
-          last_name
-          created_at
-          first_name
-          updated_at
-        }
-      }
+  # - name: List-Customer
+  #   tools: [k6]
+  #   execution_strategy: FIXED_REQUEST_NUMBER
+  #   requests: 500000
+  #   connections: 1000
+  #   query: |
+  #     query MyQuery {
+  #       customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+  #         id
+  #         last_name
+  #         first_name
+  #       }
+  #     }
+  # - name: List-Customer-Large-Batch
+  #   tools: [k6]
+  #   execution_strategy: FIXED_REQUEST_NUMBER
+  #   requests: 20000
+  #   connections: 1000
+  #   query: |
+  #     query MyQuery {
+  #       customer(limit: 7000, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+  #         id
+  #         last_name
+  #         external_ref_list
+  #         date_of_birth
+  #         created_at
+  #         first_name
+  #         updated_at
+  #       }
+  #     }
+  # - name: List-Customer-Slow-Query
+  #   tools: [k6]
+  #   execution_strategy: FIXED_REQUEST_NUMBER
+  #   requests: 10000
+  #   connections: 200
+  #   query: |
+  #     query MyQuery {
+  #       customer(offset: 750000, limit: 25) {
+  #         id
+  #         last_name
+  #         created_at
+  #         first_name
+  #         updated_at
+  #       }
+  #     }

@@ -170,7 +170,7 @@ func SetupRedisWorker(ctx context.Context, gshutdownChanel chan error) {
 			// reading from entries[0] as we are only reading from one stream
 			// for reading multiple streams, we need to loop through entries
 			// entries[0].Stream == stream
-			log.Debug(entries)
+			// log.Debug(entries)
 			for i := 0; i < len(entries[0].Messages); i++ {
 				msg := entries[0].Messages[i]
 				if msg.ID != "" && len(msg.Values) > 0 {

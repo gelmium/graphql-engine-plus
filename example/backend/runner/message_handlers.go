@@ -13,6 +13,13 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var ConfigFastest = jsoniter.Config{
+	EscapeHTML:                    false,
+	MarshalFloatWith6Digits:       true,
+	ObjectFieldMustBeSimpleString: true,
+	TagKey:                        "json",
+}.Froze()
+
 type Customer struct {
 	Id              string    `json:"id"`
 	ExternalRefList []string  `json:"external_ref_list"`
@@ -30,16 +37,6 @@ func (c Customer) MarshalBinary() (data []byte, err error) {
 func handleNewMessage(ctx context.Context, redisClient redis.UniversalClient, streamName string, consumersGroupName string, messageID string, messageData map[string]interface{}, postgresClient *pgxpool.Pool) error {
 	log.Info("Start handling messageID:", messageID)
 	// convert messageData to Customer struct
-	var ConfigFastest = jsoniter.Config{
-		EscapeHTML:                    false,
-		MarshalFloatWith6Digits:       true,
-		ObjectFieldMustBeSimpleString: true,
-		TagKey:                        "json",
-	}.Froze()
-	if messageData["payload"] == nil {
-		// ignore the old msg format, just ack the message
-		return redisClient.XAck(ctx, streamName, consumersGroupName, messageID).Err()
-	}
 	var customer Customer
 	ConfigFastest.UnmarshalFromString(messageData["payload"].(string), &customer)
 	if customer.UpdatedAt.IsZero() {

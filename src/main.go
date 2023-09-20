@@ -18,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/redis/go-redis/v9"
 	"github.com/valyala/fasthttp"
 )
@@ -132,7 +133,6 @@ func processProxyResponse(ctx context.Context, resp *fasthttp.Response, ttl int,
 	if ttl != 0 && redisKey != "" && resp.StatusCode() == 200 && redisClient != nil {
 		// read the response body and store it in redis
 		redisClient.Set(ctx, redisKey, resp.Body(), time.Duration(ttl)*time.Second)
-		log.Debug("Saved to redis cache: ", redisKey, ttl)
 		// resp.Header.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
 		// resp.Header.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
 		resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
@@ -165,8 +165,9 @@ func calculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 			continue
 		}
 		// print the header key and value
-		log.Info("Cache with headers ", k, ":", v)
-		headers = append(headers, k+":"+v)
+		header := k + ":" + v
+		log.Debug("Cache with headers ", header)
+		headers = append(headers, header)
 	}
 	// sort the header key and value
 	// to make sure that the hash is always the same
@@ -181,12 +182,22 @@ func calculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 	return familyCacheKey, cacheKey
 }
 
+var JsoniterConfigFastest = jsoniter.Config{
+	EscapeHTML:                    false,
+	MarshalFloatWith6Digits:       true,
+	ObjectFieldMustBeSimpleString: true,
+	TagKey:                        "json",
+}.Froze()
+
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
 func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, redisClient redis.UniversalClient) *fiber.App {
 	app := fiber.New(
 		fiber.Config{
 			ReadTimeout:  60 * time.Second,
 			WriteTimeout: 60 * time.Second,
+			IdleTimeout:  60 * time.Second,
+			JSONEncoder:  JsoniterConfigFastest.Marshal,
+			JSONDecoder:  JsoniterConfigFastest.Unmarshal,
 			ServerHeader: "graphql-engine-plus/v1.0.0",
 			Prefork:      false, // Prefork mode can't be enabled with sub process program running, also it doesn't give any performance boost if concurent request is low
 		},
@@ -284,12 +295,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		var ttl int
 		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisClient != nil {
 			familyCacheKey, cacheKey := calculateCacheKey(c, graphqlReq)
-			log.Debug("Cached query detected: ", cacheKey, ttl)
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = createRedisKey(familyCacheKey, cacheKey)
 			if redisCachedResponseBody, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
-				log.Debug("Cache hit: ", cacheKey)
 				return sendCachedResponseBody(c, redisCachedResponseBody, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -369,12 +378,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		var ttl int
 		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisClient != nil {
 			familyCacheKey, cacheKey := calculateCacheKey(c, graphqlReq)
-			log.Debug("Cached query detected: ", cacheKey, ttl)
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = createRedisKey(familyCacheKey, cacheKey)
 			if redisCachedResponseBody, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
-				log.Debug("Cache hit: ", cacheKey)
 				return sendCachedResponseBody(c, redisCachedResponseBody, ttl, familyCacheKey, cacheKey)
 			}
 		}

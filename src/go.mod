@@ -5,6 +5,7 @@ go 1.21.0
 require (
 	github.com/gelmium/graceful-shutdown v0.0.10
 	github.com/gofiber/fiber/v2 v2.48.0
+	github.com/json-iterator/go v1.1.12
 	github.com/redis/go-redis/v9 v9.1.0
 	github.com/valyala/fasthttp v1.48.0
 )
@@ -18,6 +19,8 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
