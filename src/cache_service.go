@@ -20,7 +20,7 @@ type RedisCacheClient struct {
 var groupcacheServer http.Server
 
 type GroupcacheOptions struct {
-	// default to 30MB
+	// default to 60MiB
 	cacheMaxSize int64
 	// default to 300 seconds
 	defaultTTL  uint64
@@ -28,7 +28,7 @@ type GroupcacheOptions struct {
 }
 
 func NewGroupCacheOptions() (options GroupcacheOptions) {
-	options.cacheMaxSize = 30000000
+	options.cacheMaxSize = 60000000
 	options.defaultTTL = 300
 	return
 }
@@ -111,13 +111,23 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 			func(ctx context.Context, cacheKey string, dest groupcache.Sink) error {
 				// Try to get the cache data from redis
 				// if not found, redis.Nil error will be return
-				// if found, groupcache will be populated with the cache data.
-				cacheData, err := client.redisReaderClient.Get(ctx, cacheKey).Bytes()
+				// if found, groupcache will be populated with the cache data
+				// we use pipeline to get the cache data and its TTL at the same time.
+				pipe := client.redisReaderClient.Pipeline()
+				getCmd := pipe.Get(ctx, cacheKey)
+				ttlCmd := pipe.TTL(ctx, cacheKey)
+				pipe.Exec(ctx)
+				cacheData, err := getCmd.Bytes()
 				if err != nil {
 					return err
 				}
-				// Set cache data in the groupcache to expire after default TTL seconds
-				return dest.SetBytes(cacheData, time.Now().Add(time.Duration(groupcacheOptions.defaultTTL)*time.Second))
+				ttl := ttlCmd.Val()
+				if ttl < 0 {
+					ttl = time.Duration(groupcacheOptions.defaultTTL) * time.Second
+				}
+				// Set cache data in the groupcache to expire after TTL seconds
+				// if TTL is less than 0, set it to defaultTTL
+				return dest.SetBytes(cacheData, time.Now().Add(ttl))
 			},
 		))
 	}
@@ -153,7 +163,9 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 		go func() {
 			// this will replicate cache data to all nodes in the groupcache cluster
 			// to disable this behaviour, set the last parameter to false
-			client.groupcacheClient.Set(ctx, key, value, time.Now().Add(expiration), true)
+			if err := client.groupcacheClient.Set(ctx, key, value, time.Now().Add(expiration), true); err != nil {
+				log.Println("Error when groupcache.Set: ", err)
+			}
 		}()
 	}
 	// set the cache data to redis
@@ -170,7 +182,7 @@ func (client *RedisCacheClient) Close(closeGroupcacheHttpServer bool) error {
 		// and will not print the below error message
 		err := groupcacheServer.Close()
 		if err != nil {
-			log.Println("Error when close groupcache server: ", err)
+			log.Println("Error when groupcache httpServer.Close(): ", err)
 		}
 	}
 	// we dont need to close groupcache client as it is not a connection pool

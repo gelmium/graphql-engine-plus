@@ -161,11 +161,11 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		}
 		var agent *fiber.Agent
 		if startupReadonlyCtx.Err() == nil {
-			// fire GET request to scripting server to do healthcheck of
-			// only primary engine, as replica engine is not yet ready
+			// fire GET request to scripting-server to do healthcheck of
+			// only primary-engine, as replica-engine is not yet ready
 			agent = fiber.Get("http://localhost:8880/health/engine?not=replica")
 		} else {
-			// fire GET request to scripting server to do full healthcheck of all engines
+			// fire GET request to scripting-server to do full healthcheck of all engines
 			agent = fiber.Get("http://localhost:8880/health/engine")
 		}
 		if err := agent.Parse(); err != nil {
@@ -239,7 +239,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		// prepare the proxy request
 		prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 		if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
-			log.Error("Error when proxying the request to primary engine:", err)
+			log.Error("Failed to request primary-engine:", err)
 		}
 		// process the proxy response
 		processProxyResponse(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
@@ -327,13 +327,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// prepare the proxy request to primary upstream
 			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 			if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
-				log.Error("Error when proxying the request to primary engine:", err)
+				log.Error("Failed to request primary-engine:", err)
 			}
 		} else {
 			// prepare the proxy request to replica upstream
 			prepareProxyRequest(req, "localhost:8882", "/v1/graphql", c.IP())
 			if err = replicaEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
-				log.Error("Error when proxying the request to replica engine:", err)
+				log.Error("Failed to request replica-engine:", err)
 			}
 		}
 		// process the proxy response
@@ -345,7 +345,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
 	// this endpoint is optional and will only be available if the env is set
 	if execPath != "" {
-		// this endpoint expose the scripting server execute endpoint to public
+		// this endpoint expose the scripting-server execute endpoint to public
 		// this allow client to by pass GraphQL engine and execute script directly
 		// be careful when exposing this endpoint to public without a strong security measure
 		app.Post(execPath, func(c *fiber.Ctx) error {
@@ -364,7 +364,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
 			err := scriptingServerProxyClient.Do(req, resp)
 			if err != nil {
-				log.Error("Error when proxying the request to scripting server:", err)
+				log.Error("Failed to request scripting-server:", err)
 			}
 			// process the proxy response
 			processProxyResponse(c.Context(), resp, nil, 0, 0, 0)
@@ -387,12 +387,14 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	if redisUrl == "" {
 		redisUrl = os.Getenv("HASURA_GRAPHQL_REDIS_URL")
 	}
+	groupcacheOptions := NewGroupCacheOptions()
+
 	redisCacheClient, err := NewRedisCacheClient(
 		ctx,
 		redisUrl,
 		os.Getenv("HASURA_GRAPHQL_REDIS_READER_URL"),
 		"http://127.0.0.1:8879",
-		NewGroupCacheOptions(),
+		groupcacheOptions,
 	)
 	if err != nil {
 		log.Error("Failed to setup Redis Client: ", err)

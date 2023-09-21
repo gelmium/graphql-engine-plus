@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# start scripting server at port 8888
+# start scripting-server at port 8888
 cd /graphql-engine/scripting/
 python3 server.py &
 

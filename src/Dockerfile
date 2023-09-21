@@ -29,7 +29,7 @@ ADD ./scripting/requirements.txt /graphql-engine/scripting/requirements.txt
 RUN pip3 install -r /graphql-engine/scripting/requirements.txt \
     && rm -rf /tmp/* /var/tmp/* /root/.cache/pip/*
 
-# Add scripting server and migrate scripts 
+# Add scripting-server and migrate scripts 
 COPY ./scripting /graphql-engine/scripting
 ADD ./migrate_hasura.sh /root/migrate_hasura.sh
 

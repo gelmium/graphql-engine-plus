@@ -31,7 +31,7 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	// read the response cacheMeta
 	redisCachedResponseResult := CacheResponseRedis{}
 	if err := JsoniterConfigFastest.Unmarshal(cacheData[8+bodyLength:], &redisCachedResponseResult); err != nil {
-		log.Error("Error when unmarshal cache meta: ", err)
+		log.Error("Failed to unmarshal cache meta: ", err)
 		return err
 	}
 	// set the response header
@@ -67,14 +67,14 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 		string(resp.Header.Peek("Content-Encoding")),
 	})
 	if err != nil {
-		log.Error("Error when marshal cache: ", err)
+		log.Error("Failed to marshal cache: ", err)
 		return
 	}
 	cacheData = append(cacheData, cacheMeta...)
 	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
 	if err := redisCacheClient.Set(ctx, redisKey, cacheData, time.Duration(ttl)*time.Second); err != nil {
-		log.Error("Error when save cache to redis: ", err)
+		log.Error("Failed to save cache to redis: ", err)
 		return
 	}
 	resp.Header.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))

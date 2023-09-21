@@ -84,7 +84,8 @@ python.run.scripting-server:
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1
-	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1readonly
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 1000, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1readonly
+	
 test.graphql-engine-plus.mutation:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -H "X-Hasura-Role: user" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:8000/public/graphql/v1

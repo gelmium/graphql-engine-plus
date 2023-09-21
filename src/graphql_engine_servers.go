@@ -58,7 +58,7 @@ func StartGraphqlEngineServers(
 	var cmds []*exec.Cmd
 	// create a waitgroup to wait for all cmds to finish
 	var wg sync.WaitGroup
-	// start scripting server at port 8880
+	// start scripting-server at port 8880
 	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8880")
 	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8880")
 	// route the output to stdout
@@ -68,7 +68,7 @@ func StartGraphqlEngineServers(
 		return cmd0.Process.Signal(syscall.SIGTERM)
 	}
 	if err := cmd0.Start(); err != nil {
-		log.Error("Error starting scripting server:", err)
+		log.Error("Failed to start scripting-server:", err)
 		os.Exit(1)
 	}
 	// call Wait() in a goroutine to avoid blocking the main thread
@@ -89,7 +89,7 @@ func StartGraphqlEngineServers(
 		return cmd1.Process.Signal(syscall.SIGTERM)
 	}
 	if err := cmd1.Start(); err != nil {
-		log.Error("Error starting graphql-engine schema v1:", err)
+		log.Error("Failed to start primary-engine:", err)
 		os.Exit(1)
 	}
 	// call Wait() in a goroutine to avoid blocking the main thread
@@ -139,7 +139,7 @@ func StartGraphqlEngineServers(
 		// 	return cmd2.Process.Signal(syscall.SIGTERM)
 		// }
 		if err := cmd2.Start(); err != nil {
-			log.Error("Error starting graphql-engine read replica:", err)
+			log.Error("Failed to start replica-engine:", err)
 			os.Exit(1)
 		}
 		// call Wait() in a goroutine to avoid blocking the main thread
@@ -149,13 +149,13 @@ func StartGraphqlEngineServers(
 			cmd2.Wait()
 		}()
 		cmds = append(cmds, cmd2)
-		// loop for the readonly replica engine to start, we dont need to wait for it
+		// loop for the readonly replica-engine to start, we dont need to wait for it
 		// so can run in a goroutine
 		go func() {
 			for {
 				// check if the startupReadonlyCtx is done
 				if startupReadonlyCtx.Err() != nil {
-					log.Error("readonly replica graphql engine is not yet ready after 60s")
+					log.Error("replica-engine is not yet ready after 60s")
 					break
 				}
 				//sleep for 0.5s
@@ -163,22 +163,22 @@ func StartGraphqlEngineServers(
 				// fire GET request to app runner health url using fiber.GET
 				agent := fiber.Get("http://localhost:8882/healthz")
 				if err := agent.Parse(); err != nil {
-					log.Warn(fmt.Sprintf("Startup wait readonly replica engine server: %v", err))
+					log.Warn(fmt.Sprintf("Startup wait readonly replica-engine server: %v", err))
 				}
 				code, _, _ := agent.Bytes()
 				if code == 200 {
-					log.Info("GraphQL Engine Plus readonly replica engine is ready")
+					log.Info("GraphQL Engine Plus readonly replica-engine is ready")
 					startupReadonlyDoneFn()
 					break
 				}
 			}
 		}()
 	}
-	// wait loop for the scripting server + primary engine to start
+	// wait loop for the scripting-server + primary-engine to start
 	for {
 		// check if the startupCtx is done
 		if startupCtx.Err() != nil {
-			log.Error("scripting server or primary graphql engine is not yet ready after 60s")
+			log.Error("scripting-server or primary-engine is not yet ready after 60s")
 			break
 		}
 		//sleep for 0.5s

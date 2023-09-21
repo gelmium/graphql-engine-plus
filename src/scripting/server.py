@@ -450,7 +450,7 @@ class AccessLogger(AbstractAccessLogger):
         )
 
 
-parser = argparse.ArgumentParser(description="aiohttp scripting server")
+parser = argparse.ArgumentParser(description="aiohttp scripting-server")
 parser.add_argument("--path")
 parser.add_argument("--port")
 
