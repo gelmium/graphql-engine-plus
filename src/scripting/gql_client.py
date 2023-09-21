@@ -16,7 +16,7 @@ get_v1_http_transport = lambda: AIOHTTPTransport(
     headers={"x-hasura-admin-secret": hasura_admin_secret},
 )
 get_ro_http_transport = lambda: AIOHTTPTransport(
-    url=f"http://localhost:8880/v1/graphql",
+    url=f"http://localhost:8882/v1/graphql",
     headers={"x-hasura-admin-secret": hasura_admin_secret},
 )
 get_go_http_transport = lambda: AIOHTTPTransport(

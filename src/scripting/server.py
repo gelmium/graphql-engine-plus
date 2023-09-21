@@ -296,7 +296,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                 and "replica" not in not_include
             ):
                 async with http_session.get(
-                    "http://localhost:8880/healthz", timeout=5
+                    "http://localhost:8882/healthz", timeout=5
                 ) as resp:
                     # extract the response status code and body
                     result["replica"] = {

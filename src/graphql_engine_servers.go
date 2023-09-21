@@ -58,9 +58,9 @@ func StartGraphqlEngineServers(
 	var cmds []*exec.Cmd
 	// create a waitgroup to wait for all cmds to finish
 	var wg sync.WaitGroup
-	// start scripting server at port 8888
-	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8888")
-	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8888")
+	// start scripting server at port 8880
+	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8880")
+	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8880")
 	// route the output to stdout
 	cmd0.Stdout = os.Stdout
 	// override the cancel function to send sigterm instead of kill
@@ -106,8 +106,8 @@ func StartGraphqlEngineServers(
 		if metadataDatabaseUrl == "" {
 			metadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
 		}
-		log.Info("Starting graphql-engine read replica at port 8880")
-		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8880")
+		log.Info("Starting graphql-engine read replica at port 8882")
+		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8882")
 		replicaUrlsString := os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
 		replicaUrlList := strings.Split(replicaUrlsString, ",")
 		cmd2Env := os.Environ()
@@ -161,7 +161,7 @@ func StartGraphqlEngineServers(
 				//sleep for 0.5s
 				time.Sleep(500 * time.Millisecond)
 				// fire GET request to app runner health url using fiber.GET
-				agent := fiber.Get("http://localhost:8880/healthz")
+				agent := fiber.Get("http://localhost:8882/healthz")
 				if err := agent.Parse(); err != nil {
 					log.Warn(fmt.Sprintf("Startup wait readonly replica engine server: %v", err))
 				}
@@ -184,7 +184,7 @@ func StartGraphqlEngineServers(
 		//sleep for 0.5s
 		time.Sleep(500 * time.Millisecond)
 		// fire GET request to app runner health url using fiber.GET
-		agent := fiber.Get("http://localhost:8888/health/engine?quite=true&not=replica")
+		agent := fiber.Get("http://localhost:8880/health/engine?quite=true&not=replica")
 		if err := agent.Parse(); err != nil {
 			log.Warn(fmt.Sprintf("Startup wait engine servers: %v", err))
 		}
@@ -248,10 +248,18 @@ func StartGraphqlEngineServers(
 		default:
 			// loop through all cmds of processes to check if any of them is exited
 			if check {
-				for _, cmd := range cmds {
+				for idx, cmd := range cmds {
 					if cmd.ProcessState != nil {
-						// concat the args to get the process name
-						processName := strings.Join(cmd.Args[:min(len(cmd.Args), 4)], " ")
+						// use idx to set the process name
+						processName := "-"
+						switch idx {
+						case 0:
+							processName = "scripting-server"
+						case 1:
+							processName = "graphql-engine:primary"
+						case 2:
+							processName = "graphql-engine:replica"
+						}
 						if cmd.ProcessState.Success() {
 							log.Error("Process unexpectedly exited with code 0 [" + processName + "]")
 						} else {

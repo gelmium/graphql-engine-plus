@@ -20,7 +20,7 @@ insert_permissions:
             - name: X-Engine-Plus-Execute-Secret
               value: '{{ENGINE_PLUS_EXECUTE_SECRET}}'
           timeout: 10
-          url: http://localhost:8888/validate?execurl=https://gist.githubusercontent.com/0xGosu/d21551c4134341091b3213b9dd63c06e/raw/quick_validate.py
+          url: http://localhost:8880/validate?execurl=https://gist.githubusercontent.com/0xGosu/d21551c4134341091b3213b9dd63c06e/raw/quick_validate.py
         type: http
     comment: ""
 select_permissions:
@@ -63,7 +63,7 @@ event_triggers:
       interval_sec: 60
       num_retries: 2
       timeout_sec: 300
-    webhook: http://localhost:8888/execute
+    webhook: http://localhost:8880/execute
     headers:
       - name: X-Engine-Plus-Execute-Secret
         value_from_env: ENGINE_PLUS_EXECUTE_SECRET

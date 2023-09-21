@@ -2,4 +2,4 @@ version: 3
 endpoint: http://localhost:8000/public/meta/
 # endpoint: https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/meta/
 # actions:
-#   handler_webhook_baseurl: http://localhost:8888
+#   handler_webhook_baseurl: https://lambda-function-url

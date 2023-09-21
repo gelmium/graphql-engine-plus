@@ -2,7 +2,7 @@ actions:
   - name: quickinsert_customer_one
     definition:
       kind: synchronous
-      handler: http://localhost:8888/execute
+      handler: http://localhost:8880/execute
       forward_client_headers: true
       headers:
         - name: X-Engine-Plus-Execute-Secret

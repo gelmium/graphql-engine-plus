@@ -15,7 +15,6 @@ import (
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/redis/go-redis/v9"
 	"github.com/valyala/fasthttp"
 )
 
@@ -75,7 +74,7 @@ var primaryEngineServerProxyClient = &fasthttp.HostClient{
 	Addr: "localhost:8881",
 }
 var replicaEngineServerProxyClient = &fasthttp.HostClient{
-	Addr: "localhost:8880",
+	Addr: "localhost:8882",
 }
 
 var scriptingServerProxyClient = &fasthttp.HostClient{
@@ -105,12 +104,12 @@ func prepareProxyRequest(req *fasthttp.Request, upstreamHost string, upstreamPat
 	}
 }
 
-func processProxyResponse(ctx context.Context, resp *fasthttp.Response, redisClient redis.UniversalClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
+func processProxyResponse(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// do not proxy "Connection" header
 	resp.Header.Del("Connection")
 	// strip other unneeded headers
-	if ttl != 0 && cacheKey > 0 && resp.StatusCode() == 200 && redisClient != nil {
-		ReadResponseBodyAndSaveToCache(ctx, resp, redisClient, ttl, familyCacheKey, cacheKey)
+	if ttl != 0 && cacheKey > 0 && resp.StatusCode() == 200 && redisCacheClient != nil {
+		ReadResponseBodyAndSaveToCache(ctx, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 	}
 }
 
@@ -122,7 +121,7 @@ var JsoniterConfigFastest = jsoniter.Config{
 }.Froze()
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
-func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, redisClient redis.UniversalClient) *fiber.App {
+func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, redisCacheClient *RedisCacheClient) *fiber.App {
 	app := fiber.New(
 		fiber.Config{
 			ReadTimeout:  60 * time.Second,
@@ -164,10 +163,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		if startupReadonlyCtx.Err() == nil {
 			// fire GET request to scripting server to do healthcheck of
 			// only primary engine, as replica engine is not yet ready
-			agent = fiber.Get("http://localhost:8888/health/engine?not=replica")
+			agent = fiber.Get("http://localhost:8880/health/engine?not=replica")
 		} else {
 			// fire GET request to scripting server to do full healthcheck of all engines
-			agent = fiber.Get("http://localhost:8888/health/engine")
+			agent = fiber.Get("http://localhost:8880/health/engine")
 		}
 		if err := agent.Parse(); err != nil {
 			log.Error(err)
@@ -226,12 +225,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
-		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisClient != nil {
+		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisCacheClient != nil {
 			familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
+			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -243,7 +242,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			log.Error("Error when proxying the request to primary engine:", err)
 		}
 		// process the proxy response
-		processProxyResponse(c.Context(), resp, redisClient, ttl, familyCacheKey, cacheKey)
+		processProxyResponse(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 		return err
 	})
 
@@ -310,12 +309,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
-		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisClient != nil {
+		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisCacheClient != nil {
 			familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisClient.Get(c.Context(), redisKey).Bytes(); err == nil {
+			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -332,13 +331,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			}
 		} else {
 			// prepare the proxy request to replica upstream
-			prepareProxyRequest(req, "localhost:8880", "/v1/graphql", c.IP())
+			prepareProxyRequest(req, "localhost:8882", "/v1/graphql", c.IP())
 			if err = replicaEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 				log.Error("Error when proxying the request to replica engine:", err)
 			}
 		}
 		// process the proxy response
-		processProxyResponse(c.Context(), resp, redisClient, ttl, familyCacheKey, cacheKey)
+		processProxyResponse(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 		return err
 	})
 
@@ -362,7 +361,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			req := c.Request()
 			resp := c.Response()
 			// prepare the proxy request
-			prepareProxyRequest(req, "localhost:8888", "/execute", c.IP())
+			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
 			err := scriptingServerProxyClient.Do(req, resp)
 			if err != nil {
 				log.Error("Error when proxying the request to scripting server:", err)
@@ -382,39 +381,32 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 
 var redisUrlRemoveUnexpectedOptionRegex = regexp.MustCompile(`(?i)(\?)?&?(ssl_cert_reqs=\w+)`)
 
-func setupRedisClient(ctx context.Context) redis.UniversalClient {
+func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	// setup redis client
-	var redisClient redis.UniversalClient
-	// reading clusterUrl from environment variable
-	clusterUrl := os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
-	if clusterUrl != "" {
-		// remove unexpected option from clusterUrl using regex
-		clusterUrl = redisUrlRemoveUnexpectedOptionRegex.ReplaceAllString(clusterUrl, "$1")
-		if clusterOpt, err := redis.ParseClusterURL(clusterUrl); err == nil {
-			clusterOpt.TLSConfig.InsecureSkipVerify = true
-			redisClient = redis.NewClusterClient(clusterOpt)
-		} else {
-			log.Error("Failed to parse Redis Cluster URL: ", err)
-		}
-	} else {
-		if opt, err := redis.ParseURL(os.Getenv("HASURA_GRAPHQL_REDIS_URL")); err == nil {
-			redisClient = redis.NewClient(opt)
-		} else {
-			log.Error("Failed to parse Redis URL: ", err)
-		}
+	redisUrl := os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+	if redisUrl == "" {
+		redisUrl = os.Getenv("HASURA_GRAPHQL_REDIS_URL")
+	}
+	redisCacheClient, err := NewRedisCacheClient(
+		ctx,
+		redisUrl,
+		os.Getenv("HASURA_GRAPHQL_REDIS_READER_URL"),
+		"http://127.0.0.1:8879",
+		NewGroupCacheOptions(),
+	)
+	if err != nil {
+		log.Error("Failed to setup Redis Client: ", err)
+		return nil
 	}
 	// ping redis server
-	if redisClient != nil {
-		if err := redisClient.Ping(ctx).Err(); err != nil {
-			log.Error("Failed to connect to Redis: ", err)
-		}
-		if clusterUrl != "" {
-			log.Info("Connected to Redis Cluster Server")
-		} else {
-			log.Info("Connected to Redis Server")
-		}
+	if err := redisCacheClient.redisClient.Ping(ctx).Err(); err != nil {
+		log.Error("Failed to connect to Redis: ", err)
 	}
-	return redisClient
+	if err := redisCacheClient.redisReaderClient.Ping(ctx).Err(); err != nil {
+		log.Error("Failed to connect to Redis: ", err)
+	}
+	log.Info("Connected to Redis Cache")
+	return redisCacheClient
 }
 
 func main() {
@@ -422,9 +414,9 @@ func main() {
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
 	// setup resources
-	redisClient := setupRedisClient(mainCtx)
+	redisCacheClient := setupRedisClient(mainCtx)
 	// setup app
-	app := setupFiber(startupCtx, startupReadonlyCtx, redisClient)
+	app := setupFiber(startupCtx, startupReadonlyCtx, redisCacheClient)
 	// get the server Host:Port from environment variable
 	var serverHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")
 	// default to empty string if the env is not set
@@ -453,10 +445,12 @@ func main() {
 		},
 		// Add other cleanup operations here
 	}
-	if redisClient != nil {
-		cleanUpOps["redis-client"] = func(shutdownCtx context.Context) error {
-			if redisClient != nil {
-				return redisClient.Close()
+	if redisCacheClient != nil {
+		cleanUpOps["cache-clients"] = func(shutdownCtx context.Context) error {
+			if redisCacheClient != nil {
+				// we dont need to close groupcache server as it will be closed
+				// together with the fiber http server
+				return redisCacheClient.Close(false)
 			} else {
 				return nil
 			}

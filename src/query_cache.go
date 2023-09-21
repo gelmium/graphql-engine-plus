@@ -12,7 +12,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
-	"github.com/redis/go-redis/v9"
 	"github.com/valyala/fasthttp"
 )
 
@@ -53,7 +52,7 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	return c.Status(200).Send(cacheBody)
 }
 
-func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisClient redis.UniversalClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
+func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// read the response body and store it in redis
 	body := resp.Body()
 	// store the body length in the first 8 bytes
@@ -74,7 +73,7 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	cacheData = append(cacheData, cacheMeta...)
 	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
-	if err := redisClient.Set(ctx, redisKey, cacheData, time.Duration(ttl)*time.Second).Err(); err != nil {
+	if err := redisCacheClient.Set(ctx, redisKey, cacheData, time.Duration(ttl)*time.Second); err != nil {
 		log.Error("Error when save cache to redis: ", err)
 		return
 	}

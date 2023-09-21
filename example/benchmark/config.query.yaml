@@ -31,6 +31,20 @@ queries:
   #     - duration: 10s
   #       target: 1000
   # CUSTOM: Pass completely custom options to each tool (see full API spec for all supported options, very large)
+  - name: List-Customer
+    # We run this first to allow Aurora Serverless have time to scale
+    tools: [k6]
+    execution_strategy: FIXED_REQUEST_NUMBER
+    requests: 1000000
+    connections: 1000
+    query: |
+      query MyQuery {
+        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          first_name
+        }
+      }
   - name: Create-Customer
     # tools: [k6, autocannon]
     # execution_strategy: REQUESTS_PER_SECOND
@@ -72,7 +86,7 @@ queries:
           updated_at
         }
       }
-  - name: List-Customer
+  - name: List-Customer-2
     # this List-Customer query is happening in parallel with the async create customer
     # from Redis message stream worker trigged by QuickInsert-Customer
     tools: [k6]
@@ -81,7 +95,7 @@ queries:
     connections: 1000
     query: |
       query MyQuery {
-        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+        customer(limit: 2, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
           id
           last_name
           first_name
