@@ -36,6 +36,10 @@ services:
       test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
       interval: 5s
       timeout: 3s
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib
+    ports:
+      - "4318:4318" 
   graphql-engine:
     image: graphql-engine-plus:latest
     ports:

@@ -11,11 +11,15 @@ import (
 	"time"
 
 	gfshutdown "github.com/gelmium/graceful-shutdown"
+	"github.com/gofiber/contrib/otelfiber/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/valyala/fasthttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // App Runner will always timeout after 120 seconds
@@ -30,6 +34,8 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 }
 
 var notForwardHeaderRegex = regexp.MustCompile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
+
+var otelExporter = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
 func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
 	for k, v := range c.GetReqHeaders() {
@@ -120,6 +126,8 @@ var JsoniterConfigFastest = jsoniter.Config{
 	TagKey:                        "json",
 }.Froze()
 
+var tracer = otel.Tracer("graphql-engine-plus")
+
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
 func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, redisCacheClient *RedisCacheClient) *fiber.App {
 	app := fiber.New(
@@ -133,8 +141,24 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			Prefork:      false, // Prefork mode can't be enabled with sub process program running, also it doesn't give any performance boost if concurent request is low
 		},
 	)
+
+	// get the PATH from environment variable
+	var v1Path = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
+	// default to /public/graphql/v1 if the env is not set
+	if v1Path == "" {
+		v1Path = "/public/graphql/v1"
+	}
+	// get the PATH from environment variable
+	var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
+	// default to /public/graphql/v1readonly if the env is not set
+	if roPath == "" {
+		roPath = "/public/graphql/v1readonly"
+	}
+	// get the PATH from environment variable
+	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
+
 	app.Use(logger.New(logger.Config{
-		Format:     "${time} \"${method} ${path}\"${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
+		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
 	}))
 
@@ -145,6 +169,15 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	// app.Use(compress.New(compress.Config{
 	// 	Level: compress.LevelBestSpeed, // 1
 	// }))
+
+	// setup opentelemetry middleware for these endpoints
+	if otelExporter == "grpc" || otelExporter == "http" {
+		app.Use(v1Path, otelfiber.Middleware())
+		app.Use(roPath, otelfiber.Middleware())
+		if execPath != "" {
+			app.Use(execPath, otelfiber.Middleware())
+		}
+	}
 
 	// get the HEALTH_CHECK_PATH from environment variable
 	var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
@@ -192,12 +225,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		}
 		return c.SendStatus(fiber.StatusOK)
 	})
-	// get the PATH from environment variable
-	var v1Path = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
-	// default to /public/graphql/v1 if the env is not set
-	if v1Path == "" {
-		v1Path = "/public/graphql/v1"
-	}
+
 	primaryVsReplicaWeight := 100
 	if os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS") != "" {
 		primaryVsReplicaWeight = 50
@@ -222,6 +250,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
+		// start tracer span
+		_, span := tracer.Start(c.Context(), graphqlReq.OperationName,
+			oteltrace.WithAttributes(
+				attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+			))
+		defer span.End()
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
@@ -231,6 +265,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
+				span.SetAttributes(attribute.Bool("cache_hit", true))
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -282,12 +317,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return sendRequestToUpstream(c, agent)
 	})
 
-	// get the PATH from environment variable
-	var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
-	// default to /public/graphql/v1readonly if the env is not set
-	if roPath == "" {
-		roPath = "/public/graphql/v1readonly"
-	}
 	// add a POST endpoint to forward request to an upstream url
 	app.Post(roPath, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
@@ -306,6 +335,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
+		// start tracer span
+		_, span := tracer.Start(c.Context(), graphqlReq.OperationName,
+			oteltrace.WithAttributes(
+				attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+			))
+		defer span.End()
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
@@ -315,6 +350,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
+				span.SetAttributes(attribute.Bool("cache_hit", true))
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -341,8 +377,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return err
 	})
 
-	// get the PATH from environment variable
-	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
 	// this endpoint is optional and will only be available if the env is set
 	if execPath != "" {
 		// this endpoint expose the scripting-server execute endpoint to public
@@ -356,6 +390,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			if headerHasuraAdminSecret == "" || headerHasuraAdminSecret != envHasuraAdminSecret {
 				return fiber.NewError(fiber.StatusUnauthorized, "Unauthorized")
 			}
+			// start tracer span
+			_, span := tracer.Start(c.Context(), "scripting-server",
+				oteltrace.WithAttributes(
+					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+				))
+			defer span.End()
 			// check and wait for startupCtx to be done
 			waitForStartupToBeCompleted(startupCtx)
 			req := c.Request()
@@ -365,6 +405,11 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			err := scriptingServerProxyClient.Do(req, resp)
 			if err != nil {
 				log.Error("Failed to request scripting-server:", err)
+			}
+			// convert executionTime bytes string to float64
+			executionTime, err := strconv.ParseFloat(string(resp.Header.Peek("X-Execution-Time")), 64)
+			if err == nil {
+				span.SetAttributes(attribute.Float64("X-Execution-Time", executionTime))
 			}
 			// process the proxy response
 			processProxyResponse(c.Context(), resp, nil, 0, 0, 0)
@@ -417,6 +462,7 @@ func main() {
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
 	// setup resources
 	redisCacheClient := setupRedisClient(mainCtx)
+	otelTracerProvider := InitTracer(mainCtx, otelExporter)
 	// setup app
 	app := setupFiber(startupCtx, startupReadonlyCtx, redisCacheClient)
 	// get the server Host:Port from environment variable
@@ -456,6 +502,12 @@ func main() {
 			} else {
 				return nil
 			}
+		}
+	}
+	if otelTracerProvider != nil {
+		// add opentelemetry tracer clean-up operation
+		cleanUpOps["opentelemetry-tracer"] = func(shutdownCtx context.Context) error {
+			return otelTracerProvider.Shutdown(shutdownCtx)
 		}
 	}
 	wait := gfshutdown.GracefulShutdown(mainCtx, shutdownTimeout, cleanUpOps)
