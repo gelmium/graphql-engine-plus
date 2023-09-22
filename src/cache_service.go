@@ -140,6 +140,7 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts TraceOptions) ([]byte, error) {
 	// start tracer span
 	_, span := traceOpts.tracer.Start(traceOpts.ctx, "RedisCacheClient.Get",
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 		oteltrace.WithAttributes(
 			attribute.String("cache.key", key),
 		))
@@ -174,6 +175,7 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts T
 func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byte, expiration time.Duration, traceOpts TraceOptions) error {
 	// start tracer span
 	_, span := traceOpts.tracer.Start(traceOpts.ctx, "RedisCacheClient.Set",
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 		oteltrace.WithAttributes(
 			attribute.String("cache.key", key),
 		))

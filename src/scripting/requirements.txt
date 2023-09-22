@@ -4,3 +4,9 @@ redis
 asyncpg
 aioboto3
 msgspec
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-aiohttp-client
+opentelemetry-instrumentation-redis

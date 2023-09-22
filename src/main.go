@@ -19,6 +19,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -36,6 +37,7 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 var notForwardHeaderRegex = regexp.MustCompile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
 
 var tracer oteltrace.Tracer
+var propagators propagation.TextMapPropagator
 var otelExporter = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
 func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
@@ -157,7 +159,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
 
 	app.Use(logger.New(logger.Config{
-		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
+		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID};${reqHeader:Traceparent}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
 	}))
 
@@ -270,10 +272,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		// prepare the proxy request
 		prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 		// start tracer span
-		_, span := tracer.Start(c.UserContext(), "primary-engine",
+		spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
+			oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 			oteltrace.WithAttributes(
 				attribute.String("graphql.operationName", graphqlReq.OperationName),
 			))
+		carrier := FastHttpHeaderCarrier{&req.Header}
+		propagators.Inject(spanCtx, carrier)
 		if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 			log.Error("Failed to request primary-engine:", err)
 		}
@@ -359,11 +364,14 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// prepare the proxy request to primary upstream
 			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 			// start tracer span
-			_, span := tracer.Start(c.UserContext(), "primary-engine",
+			spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
+				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 				oteltrace.WithAttributes(
 					attribute.String("graphql.operationName", graphqlReq.OperationName),
 					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
 				))
+			carrier := FastHttpHeaderCarrier{&req.Header}
+			propagators.Inject(spanCtx, carrier)
 			if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 				log.Error("Failed to request primary-engine:", err)
 			}
@@ -372,11 +380,14 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// prepare the proxy request to replica upstream
 			prepareProxyRequest(req, "localhost:8882", "/v1/graphql", c.IP())
 			// start tracer span
-			_, span := tracer.Start(c.UserContext(), "replica-engine",
+			spanCtx, span := tracer.Start(c.UserContext(), "replica-engine",
+				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 				oteltrace.WithAttributes(
 					attribute.String("graphql.operationName", graphqlReq.OperationName),
 					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
 				))
+			carrier := FastHttpHeaderCarrier{&req.Header}
+			propagators.Inject(spanCtx, carrier)
 			if err = replicaEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 				log.Error("Failed to request replica-engine:", err)
 			}
@@ -407,10 +418,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// prepare the proxy request
 			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
 			// start tracer span
-			_, span := tracer.Start(c.UserContext(), "scripting-server",
+			spanCtx, span := tracer.Start(c.UserContext(), "scripting-server",
+				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 				oteltrace.WithAttributes(
 					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
 				))
+			carrier := FastHttpHeaderCarrier{&req.Header}
+			propagators.Inject(spanCtx, carrier)
 			err := scriptingServerProxyClient.Do(req, resp)
 			span.End() // end tracer span
 			if err != nil {
@@ -468,8 +482,9 @@ func main() {
 	// setup resources
 	redisCacheClient := setupRedisClient(mainCtx)
 	otelTracerProvider := InitTracerProvider(mainCtx, otelExporter)
-	// this line need to happen after InitTracerProvider
+	// these 2 line need to happen after InitTracerProvider
 	tracer = otel.Tracer("graphql-engine-plus")
+	propagators = otel.GetTextMapPropagator()
 	// setup app
 	app := setupFiber(startupCtx, startupReadonlyCtx, redisCacheClient)
 	// get the server Host:Port from environment variable
@@ -511,7 +526,7 @@ func main() {
 			}
 		}
 	}
-	if otelTracerProvider != nil {
+	if otelExporter == "grpc" || otelExporter == "http" {
 		// add opentelemetry tracer clean-up operation
 		cleanUpOps["opentelemetry-tracer"] = func(shutdownCtx context.Context) error {
 			return otelTracerProvider.Shutdown(shutdownCtx)

@@ -38,12 +38,54 @@ logger = logging.getLogger("scripting-server")
 json_encoder = msgspec.json.Encoder()
 json_decoder = msgspec.json.Decoder()
 
+# setup telemetry
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+otel_exporter_type = os.environ.get("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY", "")
+ENABLE_OTEL = otel_exporter_type == "grpc" or otel_exporter_type == "http"
+if otel_exporter_type == "grpc":
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+elif otel_exporter_type == "http":
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+else:
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter as OTLPSpanExporter
+provider = TracerProvider()
+processor = BatchSpanProcessor(OTLPSpanExporter())
+provider.add_span_processor(processor)
+# Sets the global default tracer provider
+trace.set_tracer_provider(provider)
+from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry.propagators import textmap
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+
+class AiohttpRequestGetter(textmap.Getter):
+    def set(self, carrier: web.Request, key: str, value: str):
+        carrier.headers[key] = value
+
+    def get(self, carrier: web.Request, key: str):
+        return carrier.headers.get(key, None)
+
+    def keys(self, carrier: web.Request):
+        return list(carrier.headers.keys())
+
+
+# Creates a tracer from the global tracer provider
+tracer = trace.get_tracer("graphql-engine-plus")
+# Create propagators and getter
+propagators = CompositePropagator([TraceContextTextMapPropagator()])
+requestGetter = AiohttpRequestGetter()
+
 
 def backoff_retry(i):
     return 0.1 * i + random.random() * (3.0 + 0.3 * i)
 
 
 async def exec_script(request: web.Request, body):
+    # for key, value in request.headers.items():
+    #     print(f"Header: key={key}, value={value}")
     # remote execution via proxy
     execproxy = body.get("execproxy")
     if execproxy:
@@ -181,37 +223,47 @@ async def execute_code_handler(request: web.Request):
     # And execute the Python code.
     # mark starting time
     request.start_time = time.time()
-    try:
-        # Get the Python code from the JSON request body
-        body = {}
-        body = json_decoder.decode(await request.text())
-        ### execute the python script in the body
-        await exec_script(request, body)
-        ### the script can modify the body['payload'] to transform the return data
-        status_code = 200
-        result = body["payload"]
-    except Exception as e:
-        if isinstance(e, web.HTTPException):
-            raise e
-        elif isinstance(e, (SyntaxError, ValueError)):
-            status_code = body.get("status_code", 400)
+    with tracer.start_as_current_span(
+        "/execute",
+        kind=trace.SpanKind.SERVER,
+        context=propagators.extract(request, getter=requestGetter),
+    ) as parent:
+        try:
+            # Get the Python code from the JSON request body
+            body = {}
+            body = json_decoder.decode(await request.text())
+            ### execute the python script in the body
+            await exec_script(request, body)
+            ### the script can modify the body['payload'] to transform the return data
+            status_code = 200
+            result = body["payload"]
+        except Exception as e:
+            if isinstance(e, web.HTTPException):
+                raise e
+            elif isinstance(e, (SyntaxError, ValueError)):
+                status_code = body.get("status_code", 400)
+            else:
+                status_code = body.get("status_code", 500)
+            result = {
+                "error": str(e.__class__.__name__),
+                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                "traceback": str(traceback.format_exc()),
+            }
+            logger.error(result)
+        # finish the span
+        if status_code == 200:
+            parent.set_status(trace.Status(trace.StatusCode.OK))
         else:
-            status_code = body.get("status_code", 500)
-        result = {
-            "error": str(e.__class__.__name__),
-            "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-            "traceback": str(traceback.format_exc()),
-        }
-        logger.error(result)
-    # Return the result of the Python code execution.
-    return web.Response(
-        status=status_code,
-        headers={
-            "Content-type": "application/json",
-            "X-Execution-Time": f"{time.time() - request.start_time}",
-        },
-        body=json_encoder.encode(result),
-    )
+            parent.set_status(trace.Status(trace.StatusCode.ERROR))
+        # Return the result of the Python code execution.
+        return web.Response(
+            status=status_code,
+            headers={
+                "Content-type": "application/json",
+                "X-Execution-Time": f"{time.time() - request.start_time}",
+            },
+            body=json_encoder.encode(result),
+        )
 
 
 from typing import Any, Dict, List
@@ -234,48 +286,58 @@ validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
 async def validate_json_code_handler(request: web.Request):
     # mark starting time
     start_time = time.time()
-    try:
-        # get the request GET params
-        params = dict(request.query)
-        # Get the Python code from the params and assign to body
-        payload = validate_json_decoder.decode(await request.text())
-        body = {
-            "payload": payload.data.input,
-            "session": {
-                "role": payload.role,
-                "session_variables": payload.session_variables,
-                "version": payload.version,
-            },
-        }
-        body["execfile"] = params.get("execfile")
-        body["execurl"] = params.get("execurl")
-        body["execasync"] = params.get("execasync")
-        body["execfresh"] = params.get("execfresh")
-        ### execute the python script in the body
-        await exec_script(request, body)
-        ### the script can modify the body['payload'] to transform the return data
-        status_code = 200
-        result = body["payload"]
-    except Exception as e:
-        status_code = 400
-        if isinstance(e, web.HTTPException):
-            raise e
-        elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
-            pass
+    with tracer.start_as_current_span(
+        "/validate",
+        kind=trace.SpanKind.SERVER,
+        context=propagators.extract(request, getter=requestGetter),
+    ) as parent:
+        try:
+            # get the request GET params
+            params = dict(request.query)
+            # Get the Python code from the params and assign to body
+            payload = validate_json_decoder.decode(await request.text())
+            body = {
+                "payload": payload.data.input,
+                "session": {
+                    "role": payload.role,
+                    "session_variables": payload.session_variables,
+                    "version": payload.version,
+                },
+            }
+            body["execfile"] = params.get("execfile")
+            body["execurl"] = params.get("execurl")
+            body["execasync"] = params.get("execasync")
+            body["execfresh"] = params.get("execfresh")
+            ### execute the python script in the body
+            await exec_script(request, body)
+            ### the script can modify the body['payload'] to transform the return data
+            status_code = 200
+            result = body["payload"]
+        except Exception as e:
+            status_code = 400
+            if isinstance(e, web.HTTPException):
+                raise e
+            elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
+                pass
+            else:
+                logger.error(e)
+            result = {
+                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+            }
+        # finish the span
+        if status_code == 200:
+            parent.set_status(trace.Status(trace.StatusCode.OK))
         else:
-            logger.error(e)
-        result = {
-            "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-        }
-    # Return the result of the Python code execution.
-    return web.Response(
-        status=status_code,
-        headers={
-            "Content-type": "application/json",
-            "X-Execution-Time": f"{time.time() - start_time}",
-        },
-        body=json_encoder.encode(result),
-    )
+            parent.set_status(trace.Status(trace.StatusCode.ERROR))
+        # Return the result of the Python code execution.
+        return web.Response(
+            status=status_code,
+            headers={
+                "Content-type": "application/json",
+                "X-Execution-Time": f"{time.time() - start_time}",
+            },
+            body=json_encoder.encode(result),
+        )
 
 
 async def healthcheck_graphql_engine(request: web.Request):
@@ -335,7 +397,10 @@ async def get_app():
         app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
     if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
+    if ENABLE_OTEL and redis_cluster_url or redis_url:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
 
+        RedisInstrumentor().instrument()
     app["graphql_client"] = GqlAsyncClient()
     app["json_encoder"] = json_encoder
     app["json_decoder"] = json_decoder
@@ -366,8 +431,6 @@ async def get_app():
     app.router.add_get("/health", lambda x: web.Response(status=200, text="OK"))
     # add main scripting endpoint
     app.router.add_post("/execute", execute_code_handler)
-    app.router.add_post("/", execute_code_handler)
-    app.router.add_post("", execute_code_handler)
     # add validate scripting endpoint
     app.router.add_post("/validate", validate_json_code_handler)
 
@@ -437,6 +500,20 @@ async def cleanup_server(app):
 
 
 class AccessLogger(AbstractAccessLogger):
+    def get_trace_id(self, request):
+        trace_id = request.headers.get("Traceparent", "")
+        if not trace_id:
+            trace_id = request.headers.get("X-Amzn-Trace-Id", "")
+        if not trace_id:
+            trace_id = request.headers.get("X-B3-TraceId", "")
+        return trace_id
+
+    def get_request_id(self, request):
+        request_id = request.headers.get("X-Request-ID", "")
+        if not request_id:
+            request_id = request.headers.get("x-request-id", "")
+        return request_id
+
     def log(self, request, response, response_time):
         if getattr(request, "silent_access_log", False):
             return
@@ -446,7 +523,7 @@ class AccessLogger(AbstractAccessLogger):
         self.logger.info(
             f'{datetime.fromtimestamp(start_time).strftime("%Y-%m-%dT%H:%M:%S.%f")}'
             f' " {request.method.ljust(8)} {request.path}" {response.status}  {latency*1000:6f}ms'
-            f' ({response.body_length}) [{request.headers.get("X-Request-ID", "")}] "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
+            f' ({response.body_length}) [{self.get_request_id(request)};{self.get_trace_id(request)}] "{request.headers.get("Referer", "")}" "{request.headers.get("User-Agent", "")}"'
         )
 
 

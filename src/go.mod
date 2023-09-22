@@ -10,6 +10,7 @@ require (
 	github.com/mailgun/groupcache/v2 v2.5.0
 	github.com/redis/go-redis/v9 v9.1.0
 	github.com/valyala/fasthttp v1.50.0
+	go.opentelemetry.io/contrib/propagators/aws v1.19.0
 	go.opentelemetry.io/otel v1.18.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.18.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.18.0

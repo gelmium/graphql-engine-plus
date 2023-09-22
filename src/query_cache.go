@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/valyala/fasthttp"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 type CacheResponseRedis struct {
@@ -54,7 +55,9 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 
 func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64, traceOpts TraceOptions) {
 	// start tracer span
-	spanCtx, span := traceOpts.tracer.Start(traceOpts.ctx, "ReadResponseBodyAndSaveToCache")
+	spanCtx, span := traceOpts.tracer.Start(traceOpts.ctx, "ReadResponseBodyAndSaveToCache",
+		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
+	)
 	defer span.End() // end tracer span
 	// read the response body and store it in redis
 	body := resp.Body()

@@ -4,9 +4,10 @@ import (
 	"context"
 	"log"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/valyala/fasthttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 
+	xray "go.opentelemetry.io/contrib/propagators/aws/xray"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -48,13 +49,30 @@ func InitTracerProvider(ctx context.Context, otelExporter string) *sdktrace.Trac
 			)),
 	)
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(xray.Propagator{}, propagation.TraceContext{}, propagation.Baggage{}))
 	return tp
 }
 
-func StartRootSpanForFiberHandler(c *fiber.Ctx, tracer oteltrace.Tracer) (context.Context, oteltrace.Span) {
-	spanCtx, spanRoot := tracer.Start(c.Context(), c.Path(),
-		oteltrace.WithNewRoot(),
-	)
-	return spanCtx, spanRoot
+// FastHttpHeaderCarrier adapts fasthttp.RequestHeader to satisfy the TextMapCarrier interface.
+type FastHttpHeaderCarrier struct {
+	requestHeader *fasthttp.RequestHeader
+}
+
+// Get returns the value associated with the passed key.
+func (hc FastHttpHeaderCarrier) Get(key string) string {
+	return string(hc.requestHeader.Peek(key))
+}
+
+// Set stores the key-value pair.
+func (hc FastHttpHeaderCarrier) Set(key string, value string) {
+	hc.requestHeader.Set(key, value)
+}
+
+// Keys lists the keys stored in this carrier.
+func (hc FastHttpHeaderCarrier) Keys() []string {
+	var keys []string
+	for _, key := range hc.requestHeader.PeekKeys() {
+		keys = append(keys, string(key))
+	}
+	return keys
 }
