@@ -11,7 +11,7 @@ import (
 	"time"
 
 	gfshutdown "github.com/gelmium/graceful-shutdown"
-	"github.com/gofiber/contrib/otelfiber/v2"
+	"github.com/gofiber/contrib/otelfiber"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -35,6 +35,7 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 
 var notForwardHeaderRegex = regexp.MustCompile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
 
+var tracer oteltrace.Tracer
 var otelExporter = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
 func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
@@ -110,12 +111,12 @@ func prepareProxyRequest(req *fasthttp.Request, upstreamHost string, upstreamPat
 	}
 }
 
-func processProxyResponse(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
+func processProxyResponse(c *fiber.Ctx, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// do not proxy "Connection" header
 	resp.Header.Del("Connection")
 	// strip other unneeded headers
 	if ttl != 0 && cacheKey > 0 && resp.StatusCode() == 200 && redisCacheClient != nil {
-		ReadResponseBodyAndSaveToCache(ctx, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
+		ReadResponseBodyAndSaveToCache(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 	}
 }
 
@@ -125,8 +126,6 @@ var JsoniterConfigFastest = jsoniter.Config{
 	ObjectFieldMustBeSimpleString: true,
 	TagKey:                        "json",
 }.Froze()
-
-var tracer = otel.Tracer("graphql-engine-plus")
 
 // setup a fiber app which contain a simple /health endpoint which return a 200 status code
 func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, redisCacheClient *RedisCacheClient) *fiber.App {
@@ -172,11 +171,14 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 
 	// setup opentelemetry middleware for these endpoints
 	if otelExporter == "grpc" || otelExporter == "http" {
-		app.Use(v1Path, otelfiber.Middleware())
-		app.Use(roPath, otelfiber.Middleware())
-		if execPath != "" {
-			app.Use(execPath, otelfiber.Middleware())
-		}
+		app.Use(otelfiber.Middleware(otelfiber.WithNext(func(c *fiber.Ctx) bool {
+			// these endpoints will be traced
+			if c.Path() == v1Path || c.Path() == roPath || (execPath != "" && c.Path() == execPath) {
+				return false
+			}
+			// skip for others endpoint
+			return true
+		})))
 	}
 
 	// get the HEALTH_CHECK_PATH from environment variable
@@ -250,12 +252,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
-		// start tracer span
-		_, span := tracer.Start(c.Context(), graphqlReq.OperationName,
-			oteltrace.WithAttributes(
-				attribute.String("X-Request-ID", c.Get("X-Request-ID")),
-			))
-		defer span.End()
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
@@ -264,8 +260,8 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
-				span.SetAttributes(attribute.Bool("cache_hit", true))
+			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
+				TraceOptions{tracer, c.UserContext()}); err == nil {
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -273,11 +269,17 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		resp := c.Response()
 		// prepare the proxy request
 		prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
+		// start tracer span
+		_, span := tracer.Start(c.UserContext(), "primary-engine",
+			oteltrace.WithAttributes(
+				attribute.String("graphql.operationName", graphqlReq.OperationName),
+			))
 		if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 			log.Error("Failed to request primary-engine:", err)
 		}
+		span.End() // end tracer span
 		// process the proxy response
-		processProxyResponse(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
+		processProxyResponse(c, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 		return err
 	})
 
@@ -335,12 +337,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
-		// start tracer span
-		_, span := tracer.Start(c.Context(), graphqlReq.OperationName,
-			oteltrace.WithAttributes(
-				attribute.String("X-Request-ID", c.Get("X-Request-ID")),
-			))
-		defer span.End()
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
@@ -349,8 +345,8 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
-				span.SetAttributes(attribute.Bool("cache_hit", true))
+			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
+				TraceOptions{tracer, c.UserContext()}); err == nil {
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
 			}
 		}
@@ -362,18 +358,32 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		if startupReadonlyCtx.Err() == nil || primaryVsReplicaWeight >= 100 || (primaryVsReplicaWeight > 0 && rand.Intn(100) < primaryVsReplicaWeight) {
 			// prepare the proxy request to primary upstream
 			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
+			// start tracer span
+			_, span := tracer.Start(c.UserContext(), "primary-engine",
+				oteltrace.WithAttributes(
+					attribute.String("graphql.operationName", graphqlReq.OperationName),
+					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+				))
 			if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 				log.Error("Failed to request primary-engine:", err)
 			}
+			span.End() // end tracer span
 		} else {
 			// prepare the proxy request to replica upstream
 			prepareProxyRequest(req, "localhost:8882", "/v1/graphql", c.IP())
+			// start tracer span
+			_, span := tracer.Start(c.UserContext(), "replica-engine",
+				oteltrace.WithAttributes(
+					attribute.String("graphql.operationName", graphqlReq.OperationName),
+					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+				))
 			if err = replicaEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
 				log.Error("Failed to request replica-engine:", err)
 			}
+			span.End() // end tracer span
 		}
 		// process the proxy response
-		processProxyResponse(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
+		processProxyResponse(c, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 		return err
 	})
 
@@ -390,29 +400,24 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			if headerHasuraAdminSecret == "" || headerHasuraAdminSecret != envHasuraAdminSecret {
 				return fiber.NewError(fiber.StatusUnauthorized, "Unauthorized")
 			}
-			// start tracer span
-			_, span := tracer.Start(c.Context(), "scripting-server",
-				oteltrace.WithAttributes(
-					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
-				))
-			defer span.End()
 			// check and wait for startupCtx to be done
 			waitForStartupToBeCompleted(startupCtx)
 			req := c.Request()
 			resp := c.Response()
 			// prepare the proxy request
 			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
+			// start tracer span
+			_, span := tracer.Start(c.UserContext(), "scripting-server",
+				oteltrace.WithAttributes(
+					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+				))
 			err := scriptingServerProxyClient.Do(req, resp)
+			span.End() // end tracer span
 			if err != nil {
 				log.Error("Failed to request scripting-server:", err)
 			}
-			// convert executionTime bytes string to float64
-			executionTime, err := strconv.ParseFloat(string(resp.Header.Peek("X-Execution-Time")), 64)
-			if err == nil {
-				span.SetAttributes(attribute.Float64("X-Execution-Time", executionTime))
-			}
 			// process the proxy response
-			processProxyResponse(c.Context(), resp, nil, 0, 0, 0)
+			processProxyResponse(c, resp, nil, 0, 0, 0)
 			// check if X-Request-ID is set in the response header
 			// if not, set it to the request id from the original request
 			if resp.Header.Peek("X-Request-ID") == nil {
@@ -462,7 +467,9 @@ func main() {
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
 	// setup resources
 	redisCacheClient := setupRedisClient(mainCtx)
-	otelTracerProvider := InitTracer(mainCtx, otelExporter)
+	otelTracerProvider := InitTracerProvider(mainCtx, otelExporter)
+	// this line need to happen after InitTracerProvider
+	tracer = otel.Tracer("graphql-engine-plus")
 	// setup app
 	app := setupFiber(startupCtx, startupReadonlyCtx, redisCacheClient)
 	// get the server Host:Port from environment variable

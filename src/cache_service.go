@@ -9,6 +9,8 @@ import (
 
 	"github.com/mailgun/groupcache/v2"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 type RedisCacheClient struct {
@@ -135,7 +137,13 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 }
 
 // cache get using available client
-func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, error) {
+func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts TraceOptions) ([]byte, error) {
+	// start tracer span
+	_, span := traceOpts.tracer.Start(traceOpts.ctx, "RedisCacheClient.Get",
+		oteltrace.WithAttributes(
+			attribute.String("cache.key", key),
+		))
+	defer span.End() // end tracer span
 	if client.groupcacheClient != nil {
 		// if groupcache is enabled, use groupcacheClient
 		// groupcacheClient will return cache data if it is already be populated in the groupcache
@@ -144,18 +152,32 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, er
 		var cacheData []byte
 		err := client.groupcacheClient.Get(ctx, key, groupcache.AllocatingByteSliceSink(&cacheData))
 		if err != nil {
+			span.SetAttributes(attribute.Bool("cache.hit", false))
 			return nil, err
 		}
+		span.SetAttributes(attribute.Bool("cache.hit", true))
 		return cacheData, nil
 	} else {
 		// if groupcache is not enabled, use redisClient
-		return client.redisReaderClient.Get(ctx, key).Bytes()
+		cacheData, err := client.redisReaderClient.Get(ctx, key).Bytes()
+		if err != nil {
+			span.SetAttributes(attribute.Bool("cache.hit", false))
+			return nil, err
+		}
+		span.SetAttributes(attribute.Bool("cache.hit", true))
+		return cacheData, nil
 	}
 }
 
 // cache set using available client
 // the value must be encoded to []byte before calling this function
-func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byte, expiration time.Duration) error {
+func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byte, expiration time.Duration, traceOpts TraceOptions) error {
+	// start tracer span
+	_, span := traceOpts.tracer.Start(traceOpts.ctx, "RedisCacheClient.Set",
+		oteltrace.WithAttributes(
+			attribute.String("cache.key", key),
+		))
+	defer span.End() // end tracer span
 	// if groupcache is enabled, use it to set the cache data
 	if client.groupcacheClient != nil {
 		// run this in a goroutine for faster response
@@ -165,6 +187,7 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 			// to disable this behaviour, set the last parameter to false
 			if err := client.groupcacheClient.Set(ctx, key, value, time.Now().Add(expiration), true); err != nil {
 				log.Println("Error when groupcache.Set: ", err)
+				span.RecordError(err)
 			}
 		}()
 	}

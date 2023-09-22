@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/gofiber/fiber/v2"
 	"go.opentelemetry.io/otel/sdk/resource"
 
 	"go.opentelemetry.io/otel"
@@ -13,9 +14,15 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-func InitTracer(ctx context.Context, otelExporter string) *sdktrace.TracerProvider {
+type TraceOptions struct {
+	tracer oteltrace.Tracer
+	ctx    context.Context
+}
+
+func InitTracerProvider(ctx context.Context, otelExporter string) *sdktrace.TracerProvider {
 	var exporter *otlptrace.Exporter
 	var err error
 	if otelExporter == "http" {
@@ -25,11 +32,11 @@ func InitTracer(ctx context.Context, otelExporter string) *sdktrace.TracerProvid
 		exporter, err = otlptracegrpc.New(ctx)
 	} else {
 		log.Println("Unknown Open Telemetry exporter: ", otelExporter)
-		return nil
+		return oteltrace.NewNoopTracerProvider().(*sdktrace.TracerProvider)
 	}
 	if err != nil {
 		log.Println("Error when init Open Telemetry tracer: ", err)
-		return nil
+		return oteltrace.NewNoopTracerProvider().(*sdktrace.TracerProvider)
 	}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
@@ -43,4 +50,11 @@ func InitTracer(ctx context.Context, otelExporter string) *sdktrace.TracerProvid
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	return tp
+}
+
+func StartRootSpanForFiberHandler(c *fiber.Ctx, tracer oteltrace.Tracer) (context.Context, oteltrace.Span) {
+	spanCtx, spanRoot := tracer.Start(c.Context(), c.Path(),
+		oteltrace.WithNewRoot(),
+	)
+	return spanCtx, spanRoot
 }
