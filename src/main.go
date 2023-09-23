@@ -157,7 +157,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	}
 	// get the PATH from environment variable
 	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
-
 	app.Use(logger.New(logger.Config{
 		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID};${reqHeader:Traceparent}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",

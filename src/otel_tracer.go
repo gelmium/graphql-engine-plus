@@ -33,11 +33,15 @@ func InitTracerProvider(ctx context.Context, otelExporter string) *sdktrace.Trac
 		exporter, err = otlptracegrpc.New(ctx)
 	} else {
 		log.Println("Unknown Open Telemetry exporter: ", otelExporter)
-		return oteltrace.NewNoopTracerProvider().(*sdktrace.TracerProvider)
+		tp := sdktrace.NewTracerProvider()
+		tp.Shutdown(ctx)
+		return tp
 	}
 	if err != nil {
 		log.Println("Error when init Open Telemetry tracer: ", err)
-		return oteltrace.NewNoopTracerProvider().(*sdktrace.TracerProvider)
+		tp := sdktrace.NewTracerProvider()
+		tp.Shutdown(ctx)
+		return tp
 	}
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
@@ -45,11 +49,10 @@ func InitTracerProvider(ctx context.Context, otelExporter string) *sdktrace.Trac
 		sdktrace.WithResource(
 			resource.NewWithAttributes(
 				semconv.SchemaURL,
-				semconv.ServiceNameKey.String("graphql-engine-plus"), // TODO: from env
 			)),
 	)
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(xray.Propagator{}, propagation.TraceContext{}, propagation.Baggage{}))
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, xray.Propagator{}))
 	return tp
 }
 

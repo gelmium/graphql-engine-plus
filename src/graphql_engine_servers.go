@@ -62,6 +62,7 @@ func StartGraphqlEngineServers(
 	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8880")
 	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8880")
 	// route the output to stdout
+	cmd0.Stderr = os.Stderr
 	cmd0.Stdout = os.Stdout
 	// override the cancel function to send sigterm instead of kill
 	cmd0.Cancel = func() error {

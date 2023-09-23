@@ -16,6 +16,15 @@ import uvloop
 import aioboto3
 import contextlib
 import msgspec
+from typing import Any, Dict, List
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from opentelemetry import trace
+from opentelemetry.sdk.trace import Span
+from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry.propagators.textmap import Getter
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.propagators.aws import AwsXRayPropagator
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
@@ -39,29 +48,24 @@ json_encoder = msgspec.json.Encoder()
 json_decoder = msgspec.json.Decoder()
 
 # setup telemetry
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
 otel_exporter_type = os.environ.get("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY", "")
-ENABLE_OTEL = otel_exporter_type == "grpc" or otel_exporter_type == "http"
+ENABLE_OTEL = True
 if otel_exporter_type == "grpc":
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 elif otel_exporter_type == "http":
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 else:
-    from opentelemetry.sdk.trace.export import ConsoleSpanExporter as OTLPSpanExporter
-provider = TracerProvider()
-processor = BatchSpanProcessor(OTLPSpanExporter())
-provider.add_span_processor(processor)
-# Sets the global default tracer provider
-trace.set_tracer_provider(provider)
-from opentelemetry.propagators.composite import CompositePropagator
-from opentelemetry.propagators import textmap
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    ENABLE_OTEL = False
 
-
-class AiohttpRequestGetter(textmap.Getter):
+if ENABLE_OTEL:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    provider = TracerProvider()
+    processor = BatchSpanProcessor(OTLPSpanExporter())
+    provider.add_span_processor(processor)
+    # Sets the global default tracer provider
+    trace.set_tracer_provider(provider)
+class AiohttpRequestGetter(Getter):
     def set(self, carrier: web.Request, key: str, value: str):
         carrier.headers[key] = value
 
@@ -75,8 +79,36 @@ class AiohttpRequestGetter(textmap.Getter):
 # Creates a tracer from the global tracer provider
 tracer = trace.get_tracer("graphql-engine-plus")
 # Create propagators and getter
-propagators = CompositePropagator([TraceContextTextMapPropagator()])
+propagators = CompositePropagator([TraceContextTextMapPropagator(), AwsXRayPropagator()])
 requestGetter = AiohttpRequestGetter()
+
+
+
+@asynccontextmanager
+async def start_as_current_span_async(
+    *args: Any,
+    request: web.Request = None,
+    **kwargs: Any,
+) -> AsyncGenerator[Span]:
+    """Start a new span and set it as the current span.
+
+    Args:
+        *args: Arguments to pass to the tracer.start_as_current_span method
+        tracer: Tracer to use to start the span
+        **kwargs: Keyword arguments to pass to the tracer.start_as_current_span method
+
+    Yields:
+        None
+    """
+    if not ENABLE_OTEL:
+        # no ops
+        yield trace.NonRecordingSpan(kwargs.get("context"))
+        return
+    if request:
+        if not kwargs.get("context"):
+            kwargs["context"] = propagators.extract(request, getter=requestGetter)
+    with tracer.start_as_current_span(*args, **kwargs) as span:
+        yield span
 
 
 def backoff_retry(i):
@@ -223,10 +255,10 @@ async def execute_code_handler(request: web.Request):
     # And execute the Python code.
     # mark starting time
     request.start_time = time.time()
-    with tracer.start_as_current_span(
+    async with start_as_current_span_async(
         "/execute",
         kind=trace.SpanKind.SERVER,
-        context=propagators.extract(request, getter=requestGetter),
+        request=request,
     ) as parent:
         try:
             # Get the Python code from the JSON request body
@@ -265,10 +297,6 @@ async def execute_code_handler(request: web.Request):
             body=json_encoder.encode(result),
         )
 
-
-from typing import Any, Dict, List
-
-
 class ValidationData(msgspec.Struct):
     input: List[Dict[str, Any]]
 
@@ -286,10 +314,10 @@ validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
 async def validate_json_code_handler(request: web.Request):
     # mark starting time
     start_time = time.time()
-    with tracer.start_as_current_span(
+    async with start_as_current_span_async(
         "/validate",
         kind=trace.SpanKind.SERVER,
-        context=propagators.extract(request, getter=requestGetter),
+        request=request,
     ) as parent:
         try:
             # get the request GET params
