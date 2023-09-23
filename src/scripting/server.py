@@ -107,7 +107,7 @@ async def start_as_current_span_async(
 
     Args:
         *args: Arguments to pass to the tracer.start_as_current_span method
-        tracer: Tracer to use to start the span
+        request: web.Request passing this will context extraction
         **kwargs: Keyword arguments to pass to the tracer.start_as_current_span method
 
     Yields:
@@ -115,7 +115,7 @@ async def start_as_current_span_async(
     """
     attrs = kwargs.get("attributes", {})
     # override the service name as this server is embedded in the graphql-engine-plus
-    attrs["service.name"] = "scripting-server"
+    # attrs["service.name"] = "scripting-server"
     # do context extraction only if request is passed and ENABLE_OTEL is enabled
     if ENABLE_OTEL and request:
         if not kwargs.get("context"):
@@ -230,8 +230,12 @@ async def exec_script(request: web.Request, body):
     if execfile:
         exec_main_func = exec_cache.get(execfile)
         if not exec_main_func or body.get("execfresh"):
-            with open(os.path.join("/graphql-engine/scripts", execfile), "r") as f:
-                exec(f.read())
+            async with start_as_current_span_async(
+                "read-execfile",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                with open(os.path.join("/graphql-engine/scripts", execfile), "r") as f:
+                    exec(f.read())
             try:
                 exec_main_func = exec_cache[execfile] = locals()["main"]
             except KeyError:
@@ -256,11 +260,15 @@ async def exec_script(request: web.Request, body):
                 )
             exec_main_func = exec_cache.get(execurl)
             if not exec_main_func or body.get("execfresh"):
-                async with aiohttp.ClientSession() as http_session:
-                    async with http_session.get(
-                        execurl, headers={"Cache-Control": "no-cache"}
-                    ) as resp:
-                        exec(await resp.text())
+                async with start_as_current_span_async(
+                    "fetch-execurl",
+                    kind=trace.SpanKind.INTERNAL,
+                ):
+                    async with aiohttp.ClientSession() as http_session:
+                        async with http_session.get(
+                            execurl, headers={"Cache-Control": "no-cache"}
+                        ) as resp:
+                            exec(await resp.text())
                 exec_main_func = exec_cache[execurl] = locals()["main"]
     else:
         if execurl:
@@ -291,8 +299,8 @@ async def execute_code_handler(request: web.Request):
     # mark starting time
     request.start_time = time.time()
     async with start_as_current_span_async(
-        "/execute",
-        kind=trace.SpanKind.INTERNAL,
+        "scripting-server",
+        kind=trace.SpanKind.SERVER,
         request=request,
     ) as parent:
         try:
@@ -358,8 +366,8 @@ async def validate_json_code_handler(request: web.Request):
     # mark starting time
     start_time = time.time()
     async with start_as_current_span_async(
-        "/validate",
-        kind=trace.SpanKind.INTERNAL,
+        "scripting-server",
+        kind=trace.SpanKind.SERVER,
         request=request,
     ) as parent:
         # get the request GET params

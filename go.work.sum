@@ -1,5 +1,7 @@
 github.com/gelmium/graceful-shutdown v0.0.10-beta.d9cf57f h1:tp2Q0fDNxSr+EUURg2Cie3cjSsEPhWNezBlMdDrisF0=
 github.com/gelmium/graceful-shutdown v0.0.10-beta.d9cf57f/go.mod h1:Mrje9A4VYcCOkbiF5KZ4o5gCd2OH3fGkwGIzWvDnMsI=
+github.com/gelmium/graceful-shutdown v0.0.11 h1:jZCnI6PU9chqWiO1v58Y7dRWz1i06a86uOuAGn/B5Fo=
+github.com/gelmium/graceful-shutdown v0.0.11/go.mod h1:Mrje9A4VYcCOkbiF5KZ4o5gCd2OH3fGkwGIzWvDnMsI=
 github.com/gofiber/contrib/otelfiber/v2 v2.0.0-20230919211537-5d72294a059a h1:X6VmSmz9Dk43GM2A+CX6IeXztET80+VGFxSSfFk3VLM=
 github.com/gofiber/contrib/otelfiber/v2 v2.0.0-20230919211537-5d72294a059a/go.mod h1:jV1hdTgs4xmlIbC26RCs8g26us+pvCglAlWIT39COts=
 github.com/gofiber/fiber/v2 v2.49.2 h1:ONEN3/Vc+dUCxxDgZZwpqvhISgHqb+bu+isBiEyKEQs=

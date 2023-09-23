@@ -3,7 +3,7 @@ module github.com/gelmium/graphql-engine-plus
 go 1.21.0
 
 require (
-	github.com/gelmium/graceful-shutdown v0.0.10
+	github.com/gelmium/graceful-shutdown v0.0.11
 	github.com/gofiber/contrib/otelfiber v1.0.10
 	github.com/gofiber/fiber/v2 v2.48.0
 	github.com/json-iterator/go v1.1.12
