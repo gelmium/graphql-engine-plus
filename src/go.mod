@@ -8,7 +8,8 @@ require (
 	github.com/gofiber/fiber/v2 v2.48.0
 	github.com/json-iterator/go v1.1.12
 	github.com/mailgun/groupcache/v2 v2.5.0
-	github.com/redis/go-redis/v9 v9.1.0
+	github.com/redis/go-redis/extra/redisotel/v9 v9.0.5
+	github.com/redis/go-redis/v9 v9.2.0
 	github.com/valyala/fasthttp v1.50.0
 	go.opentelemetry.io/contrib/propagators/aws v1.19.0
 	go.opentelemetry.io/otel v1.18.0
@@ -35,6 +36,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.15 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421 // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/redis/go-redis/extra/rediscmd/v9 v9.0.5 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/segmentio/fasthash v1.0.3 // indirect
 	github.com/sirupsen/logrus v1.9.0 // indirect

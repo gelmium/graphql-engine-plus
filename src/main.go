@@ -157,6 +157,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	}
 	// get the PATH from environment variable
 	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
+
+	// set logger middleware
+	if os.Getenv("DEBUG") == "true" {
+		log.SetLevel(log.LevelDebug)
+	} else {
+		log.SetLevel(log.LevelInfo)
+	}
 	app.Use(logger.New(logger.Config{
 		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID};${reqHeader:Traceparent}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
@@ -253,17 +260,25 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
+		// check if this is a query or mutation (can't be mutation)
+		queryType := "query"
+		if graphqlReq.IsMutationGraphQLRequest() {
+			queryType = "mutation"
+		}
 		var redisKey string
 		var ttl int
 		var familyCacheKey, cacheKey uint64
-		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisCacheClient != nil {
-			familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
-			// check if the response body of this query has already cached in redis
-			// if yes, return the response from redis
-			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
-				TraceOptions{tracer, c.UserContext()}); err == nil {
-				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
+		if queryType == "query" {
+			// check if this is a cached query
+			if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisCacheClient != nil {
+				familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
+				// check if the response body of this query has already cached in redis
+				// if yes, return the response from redis
+				redisKey = CreateRedisKey(familyCacheKey, cacheKey)
+				if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
+					TraceOptions{tracer, c.UserContext()}); err == nil {
+					return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
+				}
 			}
 		}
 		req := c.Request()
@@ -274,7 +289,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
 			oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 			oteltrace.WithAttributes(
-				attribute.String("graphql.operationName", graphqlReq.OperationName),
+				attribute.String("graphql.operation.name", graphqlReq.OperationName),
+				attribute.String("graphql.operation.type", queryType),
+				attribute.String("graphql.document", graphqlReq.Query),
+				attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
 			))
 		carrier := FastHttpHeaderCarrier{&req.Header}
 		propagators.Inject(spanCtx, carrier)
@@ -351,7 +369,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
 				TraceOptions{tracer, c.UserContext()}); err == nil {
-				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey)
+				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 			}
 		}
 		req := c.Request()
@@ -366,8 +384,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
 				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 				oteltrace.WithAttributes(
-					attribute.String("graphql.operationName", graphqlReq.OperationName),
-					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+					attribute.String("graphql.operation.name", graphqlReq.OperationName),
+					attribute.String("graphql.operation.type", "query"),
+					attribute.String("graphql.document", graphqlReq.Query),
+					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
 				))
 			carrier := FastHttpHeaderCarrier{&req.Header}
 			propagators.Inject(spanCtx, carrier)
@@ -382,8 +402,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			spanCtx, span := tracer.Start(c.UserContext(), "replica-engine",
 				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
 				oteltrace.WithAttributes(
-					attribute.String("graphql.operationName", graphqlReq.OperationName),
-					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+					attribute.String("graphql.operation.name", graphqlReq.OperationName),
+					attribute.String("graphql.operation.type", "query"),
+					attribute.String("graphql.document", graphqlReq.Query),
+					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
 				))
 			carrier := FastHttpHeaderCarrier{&req.Header}
 			propagators.Inject(spanCtx, carrier)
@@ -467,7 +489,7 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	if err := redisCacheClient.redisClient.Ping(ctx).Err(); err != nil {
 		log.Error("Failed to connect to Redis: ", err)
 	}
-	if err := redisCacheClient.redisReaderClient.Ping(ctx).Err(); err != nil {
+	if err := redisCacheClient.redisClientReader.Ping(ctx).Err(); err != nil {
 		log.Error("Failed to connect to Redis: ", err)
 	}
 	log.Info("Connected to Redis Cache")

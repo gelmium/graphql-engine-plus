@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mailgun/groupcache/v2"
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -15,7 +16,7 @@ import (
 
 type RedisCacheClient struct {
 	redisClient       redis.UniversalClient
-	redisReaderClient redis.UniversalClient
+	redisClientReader redis.UniversalClient
 	groupcacheClient  *groupcache.Group
 }
 
@@ -56,6 +57,14 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 			return nil, err
 		}
 	}
+	// Enable tracing instrumentation.
+	if err := redisotel.InstrumentTracing(client.redisClient); err != nil {
+		log.Print("Failed to instrument tracing Redis Client: ", err)
+	}
+	// Enable metrics instrumentation.
+	if err := redisotel.InstrumentMetrics(client.redisClient); err != nil {
+		log.Print("Failed to instrument metrics Redis Client: ", err)
+	}
 
 	// do the same for redisReaderUrl
 	if redisReaderUrl == "" {
@@ -68,18 +77,26 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 		if clusterOpt, err := redis.ParseClusterURL(clusterUrl); err == nil {
 			clusterOpt.TLSConfig.InsecureSkipVerify = true
 			clusterOpt.RouteByLatency = true
-			client.redisReaderClient = redis.NewClusterClient(clusterOpt)
+			client.redisClientReader = redis.NewClusterClient(clusterOpt)
 		} else {
 			log.Print("Failed to parse Redis Cluster URL: ", err)
 			return nil, err
 		}
 	} else {
 		if opt, err := redis.ParseURL(redisReaderUrl); err == nil {
-			client.redisReaderClient = redis.NewClient(opt)
+			client.redisClientReader = redis.NewClient(opt)
 		} else {
 			log.Print("Failed to parse Redis URL: ", err)
 			return nil, err
 		}
+	}
+	// Enable tracing instrumentation.
+	if err := redisotel.InstrumentTracing(client.redisClientReader); err != nil {
+		log.Print("Failed to instrument tracing Redis Client Reader: ", err)
+	}
+	// Enable metrics instrumentation.
+	if err := redisotel.InstrumentMetrics(client.redisClientReader); err != nil {
+		log.Print("Failed to instrument metrics Redis Client Reader: ", err)
 	}
 
 	if groupcacheUrls != "" {
@@ -115,7 +132,7 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 				// if not found, redis.Nil error will be return
 				// if found, groupcache will be populated with the cache data
 				// we use pipeline to get the cache data and its TTL at the same time.
-				pipe := client.redisReaderClient.Pipeline()
+				pipe := client.redisClientReader.Pipeline()
 				getCmd := pipe.Get(ctx, cacheKey)
 				ttlCmd := pipe.TTL(ctx, cacheKey)
 				pipe.Exec(ctx)
@@ -160,7 +177,7 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts T
 		return cacheData, nil
 	} else {
 		// if groupcache is not enabled, use redisClient
-		cacheData, err := client.redisReaderClient.Get(ctx, key).Bytes()
+		cacheData, err := client.redisClientReader.Get(ctx, key).Bytes()
 		if err != nil {
 			span.SetAttributes(attribute.Bool("cache.hit", false))
 			return nil, err
@@ -201,7 +218,7 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 func (client *RedisCacheClient) Close(closeGroupcacheHttpServer bool) error {
 	// close redis client
 	err1 := client.redisClient.Close()
-	err2 := client.redisReaderClient.Close()
+	err2 := client.redisClientReader.Close()
 	if closeGroupcacheHttpServer {
 		// for some reason, http.Server.Close() may call os.Exit(1)
 		// and will not print the below error message

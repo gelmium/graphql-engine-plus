@@ -23,7 +23,12 @@ type CacheResponseRedis struct {
 	ContentEncoding string `json:"content_encoding" redis:"content_encoding"`
 }
 
-func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCacheKey uint64, cacheKey uint64) error {
+func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCacheKey uint64, cacheKey uint64, traceOpts TraceOptions) error {
+	// start tracer span
+	_, span := traceOpts.tracer.Start(traceOpts.ctx, "SendCachedResponseBody",
+		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
+	)
+	defer span.End() // end tracer span
 	// first 8 bytes of the cacheData is the length of the response body
 	// read the length of the response body
 	bodyLength := binary.LittleEndian.Uint64(cacheData[:8])
@@ -33,6 +38,7 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	redisCachedResponseResult := CacheResponseRedis{}
 	if err := JsoniterConfigFastest.Unmarshal(cacheData[8+bodyLength:], &redisCachedResponseResult); err != nil {
 		log.Error("Failed to unmarshal cache meta: ", err)
+		span.RecordError(err)
 		return err
 	}
 	// set the response header
@@ -50,6 +56,13 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 		maxAge = 0
 	}
 	c.Set("Cache-Control", "max-age="+strconv.FormatInt(maxAge, 10))
+	// get the span context and trace ids
+	spanContext := span.SpanContext()
+	traceId := spanContext.TraceID().String()
+	spanId := spanContext.SpanID().String()
+	traceFlags := spanContext.TraceFlags().String()
+	// construct the Traceparent header using above values
+	c.Request().Header.Set("Traceparent", "00-"+traceId+"-"+spanId+"-"+traceFlags)
 	return c.Status(200).Send(cacheBody)
 }
 

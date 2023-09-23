@@ -1,7 +1,5 @@
 github.com/gelmium/graceful-shutdown v0.0.10-beta.d9cf57f h1:tp2Q0fDNxSr+EUURg2Cie3cjSsEPhWNezBlMdDrisF0=
 github.com/gelmium/graceful-shutdown v0.0.10-beta.d9cf57f/go.mod h1:Mrje9A4VYcCOkbiF5KZ4o5gCd2OH3fGkwGIzWvDnMsI=
-github.com/gofiber/contrib/otelfiber v1.0.10 h1:Bu28Pi4pfYmGfIc/9+sNaBbFwTHGY/zpSIK5jBxuRtM=
-github.com/gofiber/contrib/otelfiber v1.0.10/go.mod h1:jN6AvS1HolDHTQHFURsV+7jSX96FpXYeKH6nmkq8AIw=
 github.com/gofiber/contrib/otelfiber/v2 v2.0.0-20230919211537-5d72294a059a h1:X6VmSmz9Dk43GM2A+CX6IeXztET80+VGFxSSfFk3VLM=
 github.com/gofiber/contrib/otelfiber/v2 v2.0.0-20230919211537-5d72294a059a/go.mod h1:jV1hdTgs4xmlIbC26RCs8g26us+pvCglAlWIT39COts=
 github.com/gofiber/fiber/v2 v2.49.2 h1:ONEN3/Vc+dUCxxDgZZwpqvhISgHqb+bu+isBiEyKEQs=
@@ -12,8 +10,6 @@ github.com/klauspost/compress v1.16.3/go.mod h1:ntbaceVETuRiXiv4DpjP66DpAtAGkEQs
 github.com/philhofer/fwd v1.1.2/go.mod h1:qkPdfjR2SIEbspLqpe1tO4n5yICnr2DY7mqEx2tUTP0=
 github.com/tinylib/msgp v1.1.8/go.mod h1:qkpG+2ldGg4xRFmx+jfTvZPxfGFhi64BcnL9vkCm/Tw=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
-go.opentelemetry.io/contrib v1.17.0 h1:lJJdtuNsP++XHD7tXDYEFSpsqIc7DzShuXMR5PwkmzA=
-go.opentelemetry.io/contrib v1.17.0/go.mod h1:gIzjwWFoGazJmtCaDgViqOSJPde2mCWzv60o0bWPcZs=
 go.opentelemetry.io/contrib v1.19.0 h1:rnYI7OEPMWFeM4QCqWQ3InMJ0arWMR1i0Cx9A5hcjYM=
 go.opentelemetry.io/contrib v1.19.0/go.mod h1:gIzjwWFoGazJmtCaDgViqOSJPde2mCWzv60o0bWPcZs=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=

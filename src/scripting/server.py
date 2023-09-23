@@ -25,6 +25,8 @@ from opentelemetry.propagators.composite import CompositePropagator
 from opentelemetry.propagators.textmap import Getter
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.propagators.aws import AwsXRayPropagator
+from opentelemetry.instrumentation.aiohttp_client import create_trace_config
+import socket
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
@@ -65,12 +67,23 @@ if ENABLE_OTEL:
     provider.add_span_processor(processor)
     # Sets the global default tracer provider
     trace.set_tracer_provider(provider)
+else:
+    # Sets NoOpTracerProvider as the global default tracer provider
+    trace.set_tracer_provider(trace.NoOpTracerProvider())
+    
 class AiohttpRequestGetter(Getter):
     def set(self, carrier: web.Request, key: str, value: str):
         carrier.headers[key] = value
 
     def get(self, carrier: web.Request, key: str):
-        return carrier.headers.get(key, None)
+        value = carrier.headers.get(key, None)
+        if value is None:
+            # idkw they implement like this, but when header is not present we must return None
+            # instead of empty list or [None]
+            return None
+        else:
+            # must return a list contain the value (not the value itself)
+            return [value]
 
     def keys(self, carrier: web.Request):
         return list(carrier.headers.keys())
@@ -100,13 +113,29 @@ async def start_as_current_span_async(
     Yields:
         None
     """
-    if not ENABLE_OTEL:
-        # no ops
-        yield trace.NonRecordingSpan(kwargs.get("context"))
-        return
-    if request:
+    attrs = kwargs.get("attributes", {})
+    # override the service name as this server is embedded in the graphql-engine-plus
+    attrs["service.name"] = "scripting-server"
+    # do context extraction only if request is passed and ENABLE_OTEL is enabled
+    if ENABLE_OTEL and request:
         if not kwargs.get("context"):
             kwargs["context"] = propagators.extract(request, getter=requestGetter)
+        # set the http request attributes to the span
+        attrs["http.flavor"] = f"{request.version.major}.{request.version.minor}"
+        attrs["http.method"] = request.method
+        attrs["http.request_content_length"] = request.content_length
+        attrs["http.scheme"] = request.scheme
+        attrs["http.target"] = request.path
+        attrs["http.url"] = str(request.url)
+        attrs["net.host.name"] = request.host
+        socket_type = request.transport.get_extra_info("socket").type
+        # this server only listen to TCP over unix socket or IP socket
+        attrs["net.transport"] = "ip_tcp" if socket_type == socket.SocketKind.SOCK_STREAM else "unix_tcp"
+        attrs["http.user_agent"] = request.headers.get("User-Agent", "")
+        attrs["http.client_ip"] = request.headers.get("X-Forwarded-For", "")
+        attrs["http.route"] = request.match_info.route.resource.canonical if request.match_info.route.resource else ""
+    # set the attributes
+    kwargs["attributes"] = attrs
     with tracer.start_as_current_span(*args, **kwargs) as span:
         yield span
 
@@ -137,7 +166,13 @@ async def exec_script(request: web.Request, body):
         for key, value in request.headers.items():
             if key not in disallowed_headers:
                 req_headers[key] = value
-        async with aiohttp.ClientSession() as http_session:
+        # set traces if OTEL is enabled
+        if ENABLE_OTEL:
+            # This will not Remove query params from the URL attribute on the span.
+            trace_config_list = [create_trace_config()]
+        else:
+            trace_config_list = None
+        async with aiohttp.ClientSession(trace_configs=trace_config_list) as http_session:
             max_retries = int(body.get("execproxy_max_retries", 15))
             for i in range(1, max_retries + 1):
                 try:
@@ -208,7 +243,7 @@ async def exec_script(request: web.Request, body):
     # add new script/modify existing script on the fly without deployment
     execurl = body.get("execurl")
     if ENGINE_PLUS_ALLOW_EXECURL:
-        if execurl:
+        if execurl and not execfile:
             # this is to increase security to prevent unauthorized script execution from URL
             req_execute_secret = request.headers.get("X-Engine-Plus-Execute-Secret")
             if not req_execute_secret:
@@ -257,13 +292,17 @@ async def execute_code_handler(request: web.Request):
     request.start_time = time.time()
     async with start_as_current_span_async(
         "/execute",
-        kind=trace.SpanKind.SERVER,
+        kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
         try:
             # Get the Python code from the JSON request body
             body = {}
             body = json_decoder.decode(await request.text())
+            parent.set_attribute("scripting_server.exec", body.get("execfile", body.get("execurl", "")))
+            parent.set_attribute("scripting_server.proxy", body.get("execproxy", ""))
+            parent.set_attribute("scripting_server.fresh", bool(body.get("execfresh", False)))
+            parent.set_attribute("scripting_server.async", bool(body.get("execasync", False)))
             ### execute the python script in the body
             await exec_script(request, body)
             ### the script can modify the body['payload'] to transform the return data
@@ -276,6 +315,7 @@ async def execute_code_handler(request: web.Request):
                 status_code = body.get("status_code", 400)
             else:
                 status_code = body.get("status_code", 500)
+                parent.record_exception(e)
             result = {
                 "error": str(e.__class__.__name__),
                 "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
@@ -285,8 +325,11 @@ async def execute_code_handler(request: web.Request):
         # finish the span
         if status_code == 200:
             parent.set_status(trace.Status(trace.StatusCode.OK))
-        else:
+        elif status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
+        parent.set_attribute("http.status_code", status_code)
+        response_body = json_encoder.encode(result)
+        parent.set_attribute("http.response_content_length", len(response_body))
         # Return the result of the Python code execution.
         return web.Response(
             status=status_code,
@@ -294,7 +337,7 @@ async def execute_code_handler(request: web.Request):
                 "Content-type": "application/json",
                 "X-Execution-Time": f"{time.time() - request.start_time}",
             },
-            body=json_encoder.encode(result),
+            body=response_body,
         )
 
 class ValidationData(msgspec.Struct):
@@ -316,12 +359,14 @@ async def validate_json_code_handler(request: web.Request):
     start_time = time.time()
     async with start_as_current_span_async(
         "/validate",
-        kind=trace.SpanKind.SERVER,
+        kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
+        # get the request GET params
+        params = dict(request.query)
+        parent.set_attribute("scripting_server.exec", params.get("execfile", params.get("execurl", "")))
+        parent.set_attribute("scripting_server.fresh", bool(params.get("execfresh", False)))
         try:
-            # get the request GET params
-            params = dict(request.query)
             # Get the Python code from the params and assign to body
             payload = validate_json_decoder.decode(await request.text())
             body = {
@@ -334,7 +379,6 @@ async def validate_json_code_handler(request: web.Request):
             }
             body["execfile"] = params.get("execfile")
             body["execurl"] = params.get("execurl")
-            body["execasync"] = params.get("execasync")
             body["execfresh"] = params.get("execfresh")
             ### execute the python script in the body
             await exec_script(request, body)
@@ -349,14 +393,18 @@ async def validate_json_code_handler(request: web.Request):
                 pass
             else:
                 logger.error(e)
+                parent.record_exception(e)
             result = {
                 "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
             }
         # finish the span
         if status_code == 200:
             parent.set_status(trace.Status(trace.StatusCode.OK))
-        else:
+        elif status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
+        parent.set_attribute("http.status_code", status_code)
+        response_body = json_encoder.encode(result)
+        parent.set_attribute("http.response_content_length", len(response_body))
         # Return the result of the Python code execution.
         return web.Response(
             status=status_code,
@@ -364,7 +412,7 @@ async def validate_json_code_handler(request: web.Request):
                 "Content-type": "application/json",
                 "X-Execution-Time": f"{time.time() - start_time}",
             },
-            body=json_encoder.encode(result),
+            body=response_body,
         )
 
 
@@ -421,11 +469,17 @@ async def get_app():
     # init dependencies
     redis_cluster_url = os.environ.get("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
     redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
+    redis_reader_url = os.environ.get("HASURA_GRAPHQL_REDIS_READER_URL")
     if redis_cluster_url:
-        app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
+        app["redis_client"] = app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
+        app["redis_client_reader"] = app["redis_cluster_reader"] = await redis.RedisCluster.from_url(
+            redis_cluster_url, read_from_replicas=True
+        )
     if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
-    if ENABLE_OTEL and redis_cluster_url or redis_url:
+    if redis_reader_url:
+        app["redis_client_reader"] = await redis.from_url(redis_reader_url)
+    if ENABLE_OTEL and (redis_cluster_url or redis_url or redis_reader_url):
         from opentelemetry.instrumentation.redis import RedisInstrumentor
 
         RedisInstrumentor().instrument()
@@ -513,10 +567,18 @@ async def cleanup_server(app):
     if redis_cluster:
         print("Scripting server shutdown: Closing redis-cluster connection")
         futures.append(redis_cluster.close())
+    redis_cluster_reader = app.get("redis_cluster_reader")
+    if redis_cluster_reader:
+        print("Scripting server shutdown: Closing redis-cluster-reader connection")
+        futures.append(redis_cluster_reader.close())
     redis_client = app.get("redis_client")
     if redis_client:
         print("Scripting server shutdown: Closing redis connection")
         futures.append(redis_client.close())
+    redis_client_reader = app.get("redis_client_reader")
+    if redis_client_reader:
+        print("Scripting server shutdown: Closing redis-reader connection")
+        futures.append(redis_client_reader.close())
     # close boto3 session
     boto3_context_stack = app.get("boto3_context_stack")
     if boto3_context_stack:
