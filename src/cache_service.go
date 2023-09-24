@@ -206,7 +206,6 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 			// to disable this behaviour, set the last parameter to false
 			if err := client.groupcacheClient.Set(ctx, key, value, time.Now().Add(expiration), true); err != nil {
 				log.Println("Error when groupcache.Set: ", err)
-				span.RecordError(err)
 			}
 		}()
 	}

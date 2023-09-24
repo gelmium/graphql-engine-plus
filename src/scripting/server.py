@@ -27,6 +27,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from opentelemetry.propagators.aws import AwsXRayPropagator
 from opentelemetry.instrumentation.aiohttp_client import create_trace_config
 import socket
+from aws_xray_sdk.core import patch
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
@@ -37,6 +38,12 @@ ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
 # global variable to cache the boto3 session
 if ENGINE_PLUS_ENABLE_BOTO3:
     boto3_session = aioboto3.Session()
+    from aws_xray_sdk.core.async_context import AsyncContext
+    from aws_xray_sdk.core import xray_recorder
+    # Configure X-Ray to use AsyncContext
+    xray_recorder.configure(service='scripting-server', context=AsyncContext())
+    patch(["aioboto3", "aiobotocore"])
+    
 
 # environment variables
 ENGINE_PLUS_ALLOW_EXECURL = os.environ.get("ENGINE_PLUS_ALLOW_EXECURL")
@@ -126,7 +133,7 @@ async def start_as_current_span_async(
         attrs["http.request_content_length"] = request.content_length
         attrs["http.scheme"] = request.scheme
         attrs["http.target"] = request.path
-        attrs["http.url"] = str(request.url)
+        attrs["http.url"] = str(request.url).split("?", 1)[0]
         attrs["net.host.name"] = request.host
         socket_type = request.transport.get_extra_info("socket").type
         # this server only listen to TCP over unix socket or IP socket
@@ -300,7 +307,7 @@ async def execute_code_handler(request: web.Request):
     request.start_time = time.time()
     async with start_as_current_span_async(
         "scripting-server",
-        kind=trace.SpanKind.SERVER,
+        kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
         try:
@@ -367,7 +374,7 @@ async def validate_json_code_handler(request: web.Request):
     start_time = time.time()
     async with start_as_current_span_async(
         "scripting-server",
-        kind=trace.SpanKind.SERVER,
+        kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
         # get the request GET params

@@ -287,7 +287,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 		// start tracer span
 		spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
-			oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+			oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 			oteltrace.WithAttributes(
 				attribute.String("graphql.operation.name", graphqlReq.OperationName),
 				attribute.String("graphql.operation.type", queryType),
@@ -382,7 +382,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 			// start tracer span
 			spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
-				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 				oteltrace.WithAttributes(
 					attribute.String("graphql.operation.name", graphqlReq.OperationName),
 					attribute.String("graphql.operation.type", "query"),
@@ -400,7 +400,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			prepareProxyRequest(req, "localhost:8882", "/v1/graphql", c.IP())
 			// start tracer span
 			spanCtx, span := tracer.Start(c.UserContext(), "replica-engine",
-				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 				oteltrace.WithAttributes(
 					attribute.String("graphql.operation.name", graphqlReq.OperationName),
 					attribute.String("graphql.operation.type", "query"),
@@ -440,9 +440,9 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
 			// start tracer span
 			spanCtx, span := tracer.Start(c.UserContext(), "scripting-server",
-				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 				oteltrace.WithAttributes(
-					attribute.String("X-Request-ID", c.Get("X-Request-ID")),
+					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
 				))
 			carrier := FastHttpHeaderCarrier{&req.Header}
 			propagators.Inject(spanCtx, carrier)
@@ -500,9 +500,10 @@ func main() {
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
+	// this must happen as early as possible
+	otelTracerProvider := InitTracerProvider(mainCtx, otelExporter)
 	// setup resources
 	redisCacheClient := setupRedisClient(mainCtx)
-	otelTracerProvider := InitTracerProvider(mainCtx, otelExporter)
 	// these 2 line need to happen after InitTracerProvider
 	tracer = otel.Tracer("graphql-engine-plus")
 	propagators = otel.GetTextMapPropagator()
