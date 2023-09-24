@@ -13,6 +13,7 @@ async def main(request: web.Request, body):
     import msgspec
     from typing import Annotated, Optional, List
     from datetime import date, datetime
+    from gql import gql, Client
 
     class InsertCustomer(msgspec.Struct):
         first_name: str
@@ -33,5 +34,16 @@ async def main(request: web.Request, body):
             raise ValueError("updated_at must not be specified when insert")
         if c.first_name == c.last_name:
             raise ValueError("first_name is the same as last_name")
-    # you can do more validation using database connection or redis cache
-    body["payload"] = {}
+    # you can do more validation using graphql_client or redis_client
+    graphql_client: Client = request.app["graphql_client"]
+    query = gql(
+        """query MyQuery {
+        customer(limit: 1, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+          id
+          last_name
+          first_name
+        }
+      }"""
+    )
+    result = await graphql_client.execute(query)
+    body["payload"] = result

@@ -37,7 +37,7 @@ ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
 # global variable to cache the boto3 session
 if ENGINE_PLUS_ENABLE_BOTO3:
     boto3_session = aioboto3.Session()
-    
+
 
 # environment variables
 ENGINE_PLUS_ALLOW_EXECURL = os.environ.get("ENGINE_PLUS_ALLOW_EXECURL")
@@ -63,6 +63,7 @@ else:
 if ENABLE_OTEL:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
     provider = TracerProvider()
     processor = BatchSpanProcessor(OTLPSpanExporter())
     provider.add_span_processor(processor)
@@ -71,7 +72,8 @@ if ENABLE_OTEL:
 else:
     # Sets NoOpTracerProvider as the global default tracer provider
     trace.set_tracer_provider(trace.NoOpTracerProvider())
-    
+
+
 class AiohttpRequestGetter(Getter):
     def set(self, carrier: web.Request, key: str, value: str):
         carrier.headers[key] = value
@@ -93,9 +95,10 @@ class AiohttpRequestGetter(Getter):
 # Creates a tracer from the global tracer provider
 tracer = trace.get_tracer("graphql-engine-plus")
 # Create propagators and getter
-propagators = CompositePropagator([TraceContextTextMapPropagator(), AwsXRayPropagator()])
+propagators = CompositePropagator(
+    [TraceContextTextMapPropagator(), AwsXRayPropagator()]
+)
 requestGetter = AiohttpRequestGetter()
-
 
 
 @asynccontextmanager
@@ -131,10 +134,16 @@ async def start_as_current_span_async(
         attrs["net.host.name"] = request.host
         socket_type = request.transport.get_extra_info("socket").type
         # this server only listen to TCP over unix socket or IP socket
-        attrs["net.transport"] = "ip_tcp" if socket_type == socket.SocketKind.SOCK_STREAM else "unix_tcp"
+        attrs["net.transport"] = (
+            "ip_tcp" if socket_type == socket.SocketKind.SOCK_STREAM else "unix_tcp"
+        )
         attrs["http.user_agent"] = request.headers.get("User-Agent", "")
         attrs["http.client_ip"] = request.headers.get("X-Forwarded-For", "")
-        attrs["http.route"] = request.match_info.route.resource.canonical if request.match_info.route.resource else ""
+        attrs["http.route"] = (
+            request.match_info.route.resource.canonical
+            if request.match_info.route.resource
+            else ""
+        )
     # set the attributes
     kwargs["attributes"] = attrs
     with tracer.start_as_current_span(*args, **kwargs) as span:
@@ -173,7 +182,9 @@ async def exec_script(request: web.Request, body):
             trace_config_list = [create_trace_config()]
         else:
             trace_config_list = None
-        async with aiohttp.ClientSession(trace_configs=trace_config_list) as http_session:
+        async with aiohttp.ClientSession(
+            trace_configs=trace_config_list
+        ) as http_session:
             max_retries = int(body.get("execproxy_max_retries", 15))
             for i in range(1, max_retries + 1):
                 try:
@@ -187,7 +198,9 @@ async def exec_script(request: web.Request, body):
                                 body["payload"] = json_decoder.decode(text_body)
                             except msgspec.DecodeError:
                                 body["payload"] = text_body
-                            body["execution_time"] = resp.headers.get("X-Execution-Time")
+                            body["execution_time"] = resp.headers.get(
+                                "X-Execution-Time"
+                            )
                             break
                         elif resp.status == 429:
                             # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
@@ -309,10 +322,18 @@ async def execute_code_handler(request: web.Request):
             # Get the Python code from the JSON request body
             body = {}
             body = json_decoder.decode(await request.text())
-            parent.set_attribute("scripting_server.exec", body.get("execfile", body.get("execurl", "")))
-            parent.set_attribute("scripting_server.execproxy", body.get("execproxy", ""))
-            parent.set_attribute("scripting_server.execfresh", bool(body.get("execfresh", False)))
-            parent.set_attribute("scripting_server.execasync", bool(body.get("execasync", False)))
+            parent.set_attribute(
+                "scripting_server.exec", body.get("execfile", body.get("execurl", ""))
+            )
+            parent.set_attribute(
+                "scripting_server.execproxy", body.get("execproxy", "")
+            )
+            parent.set_attribute(
+                "scripting_server.execfresh", bool(body.get("execfresh", False))
+            )
+            parent.set_attribute(
+                "scripting_server.execasync", bool(body.get("execasync", False))
+            )
             ### execute the python script in the body
             await exec_script(request, body)
             ### the script can modify the body['payload'] to transform the return data
@@ -352,6 +373,7 @@ async def execute_code_handler(request: web.Request):
             body=response_body,
         )
 
+
 class ValidationData(msgspec.Struct):
     input: List[Dict[str, Any]]
 
@@ -376,8 +398,12 @@ async def validate_json_code_handler(request: web.Request):
     ) as parent:
         # get the request GET params
         params = dict(request.query)
-        parent.set_attribute("scripting_server.exec", params.get("execfile", params.get("execurl", "")))
-        parent.set_attribute("scripting_server.execfresh", bool(params.get("execfresh", False)))
+        parent.set_attribute(
+            "scripting_server.exec", params.get("execfile", params.get("execurl", ""))
+        )
+        parent.set_attribute(
+            "scripting_server.execfresh", bool(params.get("execfresh", False))
+        )
         try:
             # Get the Python code from the params and assign to body
             payload = validate_json_decoder.decode(await request.text())
@@ -451,6 +477,9 @@ async def healthcheck_graphql_engine(request: web.Request):
                         "status": resp.status,
                         "body": await resp.text(),
                     }
+                    if resp.status == 200:
+                        # replica is available, set the flag in graphql_client to True
+                        request.app["graphql_client"]._client_ro_available = True
             health_status = 200
             if result["replica"].get("status", 200) != 200:
                 health_status = result["replica"]["status"]
@@ -481,8 +510,12 @@ async def get_app():
     redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
     redis_reader_url = os.environ.get("HASURA_GRAPHQL_REDIS_READER_URL")
     if redis_cluster_url:
-        app["redis_client"] = app["redis_cluster"] = await redis.RedisCluster.from_url(redis_cluster_url)
-        app["redis_client_reader"] = app["redis_cluster_reader"] = await redis.RedisCluster.from_url(
+        app["redis_client"] = app["redis_cluster"] = await redis.RedisCluster.from_url(
+            redis_cluster_url
+        )
+        app["redis_client_reader"] = app[
+            "redis_cluster_reader"
+        ] = await redis.RedisCluster.from_url(
             redis_cluster_url, read_from_replicas=True
         )
     if redis_url:
@@ -493,7 +526,7 @@ async def get_app():
         from opentelemetry.instrumentation.redis import RedisInstrumentor
 
         RedisInstrumentor().instrument()
-    app["graphql_client"] = GqlAsyncClient()
+    app["graphql_client"] = GqlAsyncClient(tracer)
     app["json_encoder"] = json_encoder
     app["json_decoder"] = json_decoder
 
@@ -556,8 +589,7 @@ async def get_app():
         handlers=[default_handler],
         level=app_log_level,
     )
-    # set log level for boto logger to disable boto logs
-    for name in [
+    disable_loggers = [
         "boto",
         "urllib3",
         "s3transfer",
@@ -565,7 +597,10 @@ async def get_app():
         "botocore",
         "aioboto3",
         "aiobotocore",
-    ]:
+        "gql.transport.aiohttp"
+    ]
+    # set log level to ERROR for these loggers to reduce log noise
+    for name in disable_loggers:
         logging.getLogger(name).setLevel(logging.ERROR)
     return app
 
