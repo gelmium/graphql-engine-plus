@@ -12,4 +12,3 @@ opentelemetry-instrumentation-aiohttp-client
 opentelemetry-instrumentation-redis
 opentelemetry-sdk-extension-aws
 opentelemetry-propagator-aws-xray
-aws-xray-sdk

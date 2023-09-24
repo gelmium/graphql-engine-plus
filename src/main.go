@@ -439,7 +439,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// prepare the proxy request
 			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
 			// start tracer span
-			spanCtx, span := tracer.Start(c.UserContext(), "scripting-server",
+			spanCtx, span := tracer.Start(c.UserContext(), "proxy -> scripting-server: /execute",
 				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 				oteltrace.WithAttributes(
 					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),

@@ -27,7 +27,6 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from opentelemetry.propagators.aws import AwsXRayPropagator
 from opentelemetry.instrumentation.aiohttp_client import create_trace_config
 import socket
-from aws_xray_sdk.core import patch
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
@@ -38,11 +37,6 @@ ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
 # global variable to cache the boto3 session
 if ENGINE_PLUS_ENABLE_BOTO3:
     boto3_session = aioboto3.Session()
-    from aws_xray_sdk.core.async_context import AsyncContext
-    from aws_xray_sdk.core import xray_recorder
-    # Configure X-Ray to use AsyncContext
-    xray_recorder.configure(service='scripting-server', context=AsyncContext())
-    patch(["aioboto3", "aiobotocore"])
     
 
 # environment variables
@@ -193,6 +187,7 @@ async def exec_script(request: web.Request, body):
                                 body["payload"] = json_decoder.decode(text_body)
                             except msgspec.DecodeError:
                                 body["payload"] = text_body
+                            body["execution_time"] = resp.headers.get("X-Execution-Time")
                             break
                         elif resp.status == 429:
                             # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
@@ -306,7 +301,7 @@ async def execute_code_handler(request: web.Request):
     # mark starting time
     request.start_time = time.time()
     async with start_as_current_span_async(
-        "scripting-server",
+        "scripting-server: /execute",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
@@ -315,9 +310,9 @@ async def execute_code_handler(request: web.Request):
             body = {}
             body = json_decoder.decode(await request.text())
             parent.set_attribute("scripting_server.exec", body.get("execfile", body.get("execurl", "")))
-            parent.set_attribute("scripting_server.proxy", body.get("execproxy", ""))
-            parent.set_attribute("scripting_server.fresh", bool(body.get("execfresh", False)))
-            parent.set_attribute("scripting_server.async", bool(body.get("execasync", False)))
+            parent.set_attribute("scripting_server.execproxy", body.get("execproxy", ""))
+            parent.set_attribute("scripting_server.execfresh", bool(body.get("execfresh", False)))
+            parent.set_attribute("scripting_server.execasync", bool(body.get("execasync", False)))
             ### execute the python script in the body
             await exec_script(request, body)
             ### the script can modify the body['payload'] to transform the return data
@@ -338,19 +333,21 @@ async def execute_code_handler(request: web.Request):
             }
             logger.error(result)
         # finish the span
-        if status_code == 200:
-            parent.set_status(trace.Status(trace.StatusCode.OK))
-        elif status_code >= 500:
+        if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
         parent.set_attribute("http.status_code", status_code)
         response_body = json_encoder.encode(result)
         parent.set_attribute("http.response_content_length", len(response_body))
+        # check if the script set the X-Execution-Time header (execproxy)
+        x_execution_time = body.get("execution_time")
+        if not x_execution_time:
+            x_execution_time = f"{time.time() - request.start_time}"
         # Return the result of the Python code execution.
         return web.Response(
             status=status_code,
             headers={
                 "Content-type": "application/json",
-                "X-Execution-Time": f"{time.time() - request.start_time}",
+                "X-Execution-Time": x_execution_time,
             },
             body=response_body,
         )
@@ -373,14 +370,14 @@ async def validate_json_code_handler(request: web.Request):
     # mark starting time
     start_time = time.time()
     async with start_as_current_span_async(
-        "scripting-server",
+        "scripting-server: /validate",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
         # get the request GET params
         params = dict(request.query)
         parent.set_attribute("scripting_server.exec", params.get("execfile", params.get("execurl", "")))
-        parent.set_attribute("scripting_server.fresh", bool(params.get("execfresh", False)))
+        parent.set_attribute("scripting_server.execfresh", bool(params.get("execfresh", False)))
         try:
             # Get the Python code from the params and assign to body
             payload = validate_json_decoder.decode(await request.text())
@@ -413,9 +410,7 @@ async def validate_json_code_handler(request: web.Request):
                 "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
             }
         # finish the span
-        if status_code == 200:
-            parent.set_status(trace.Status(trace.StatusCode.OK))
-        elif status_code >= 500:
+        if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
         parent.set_attribute("http.status_code", status_code)
         response_body = json_encoder.encode(result)
