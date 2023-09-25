@@ -430,7 +430,6 @@ async def validate_json_code_handler(request: web.Request):
             elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
                 pass
             else:
-                logger.error(e)
                 parent.record_exception(e)
             result = {
                 "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),

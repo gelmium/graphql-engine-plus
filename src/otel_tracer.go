@@ -32,7 +32,9 @@ func InitTracerProvider(ctx context.Context, otelExporter string) *sdktrace.Trac
 	} else if otelExporter == "grpc" {
 		exporter, err = otlptracegrpc.New(ctx)
 	} else {
-		log.Println("Unknown Open Telemetry exporter: ", otelExporter)
+		if otelExporter != "" && otelExporter != "false" {
+			log.Println("Error, unknown Open Telemetry exporter: ", otelExporter)
+		}
 		tp := sdktrace.NewTracerProvider()
 		tp.Shutdown(ctx)
 		return tp
