@@ -277,8 +277,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 				redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 				if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
 					TraceOptions{tracer, c.UserContext()}); err == nil {
+					log.Debug("Cache hit for cacheKey: ", cacheKey)
 					return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 				}
+				log.Debug("Cache miss for cacheKey: ", cacheKey)
 			}
 		}
 		req := c.Request()
@@ -369,8 +371,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
 				TraceOptions{tracer, c.UserContext()}); err == nil {
+				log.Debug("Cache hit for cacheKey: ", cacheKey)
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 			}
+			log.Debug("Cache miss for cacheKey: ", cacheKey)
 		}
 		req := c.Request()
 		resp := c.Response()

@@ -26,13 +26,18 @@ type GroupcacheOptions struct {
 	// default to 60MiB
 	cacheMaxSize int64
 	// default to 300 seconds
-	defaultTTL  uint64
+	defaultTTL uint64
+
+	// by seting it > 0, the others process will wait up to ETA seconds for first process to populate the cache data
+	// this will avoid the thundering herd problem. value default to 3 seconds.
+	waitETA     uint64
 	poolOptions groupcache.HTTPPoolOptions
 }
 
 func NewGroupCacheOptions() (options GroupcacheOptions) {
 	options.cacheMaxSize = 60000000
 	options.defaultTTL = 300
+	options.waitETA = 3
 	return
 }
 
@@ -135,10 +140,61 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 				pipe := client.redisClientReader.Pipeline()
 				getCmd := pipe.Get(ctx, cacheKey)
 				ttlCmd := pipe.TTL(ctx, cacheKey)
+				var setEtaCmd *redis.BoolCmd
+				if groupcacheOptions.waitETA > 0 {
+					// if waitETA >0, we will try to do ETA lock to wait for the cache data to be populated
+					setEtaCmd = pipe.SetNX(ctx, cacheKey+"-rediscaches.ETA",
+						time.Now().Add(time.Duration(groupcacheOptions.waitETA)*time.Second).UnixMilli(),
+						time.Duration(groupcacheOptions.waitETA)*time.Second)
+				}
 				pipe.Exec(ctx)
-				cacheData, err := getCmd.Bytes()
-				if err != nil {
-					return err
+				cacheData, originalErr := getCmd.Bytes()
+				if originalErr != nil {
+					if groupcacheOptions.waitETA > 0 && originalErr == redis.Nil {
+						// cache miss, check if ETA is set
+						etaIsSet, _ := setEtaCmd.Result()
+						if etaIsSet {
+							// ETA is set, return redis.Nil right away to indicate cache miss and continue.
+							// this current process has already acquired the lock to populate the cache data to this cache key
+							// other process will wait for the ETA to expire before try to populate the cache data.
+							log.Println("Accquired ETA lock for key: ", cacheKey)
+							return redis.Nil
+						} else {
+							// ETA is not set, this mean another process is populating
+							// the cache data for this cache key. We should wait for a while and try again.
+							// First get the ETA value
+							eta, err := client.redisClientReader.Get(ctx, cacheKey+"-rediscaches.ETA").Int64()
+							if err != nil {
+								eta = time.Now().Add(time.Duration(groupcacheOptions.waitETA) * time.Second).UnixMilli()
+							}
+							// Wait loop check til ETA
+							for time.Now().UnixMilli() < eta {
+								// check for cache data is populated
+								pipe := client.redisClientReader.Pipeline()
+								checkCmd := pipe.Get(ctx, cacheKey)
+								getTTLCmd := pipe.TTL(ctx, cacheKey)
+								pipe.Exec(ctx)
+								cacheData, err := checkCmd.Bytes()
+								if err == redis.Nil {
+									// cache data is not populated yet, wait for 50 millisecond
+									time.Sleep(50 * time.Millisecond)
+									continue
+								} else if err != nil {
+									// break out of loop to return original err
+									log.Println("Error when wait for cache to be populated: ", err)
+									break
+								} else {
+									// cache data is populated, set the cache data to groupcache
+									ttl := getTTLCmd.Val()
+									if ttl < 0 {
+										ttl = time.Duration(groupcacheOptions.defaultTTL) * time.Second
+									}
+									return dest.SetBytes(cacheData, time.Now().Add(ttl))
+								}
+							}
+						}
+					}
+					return originalErr
 				}
 				ttl := ttlCmd.Val()
 				if ttl < 0 {
