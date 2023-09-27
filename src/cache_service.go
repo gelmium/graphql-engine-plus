@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,12 +16,15 @@ import (
 )
 
 type RedisCacheClient struct {
-	redisClient       redis.UniversalClient
-	redisClientReader redis.UniversalClient
-	groupcacheClient  *groupcache.Group
+	redisClient         redis.UniversalClient
+	redisClientReader   redis.UniversalClient
+	groupcacheClient    *groupcache.Group
+	groupcacheServerUrl string
 }
 
 var groupcacheServer http.Server
+
+const GroupCacheClusterNodesUrlKey = "rediscaches.groupcache.cluster"
 
 type GroupcacheOptions struct {
 	// default to 60MiB
@@ -109,6 +113,13 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 		// ex: http://192.168.1.1:8080, http://192.168.1.2:8080, http://192.168.1.3:8080
 		// for self single node setup, groupcacheUrls will be http://127.0.0.1:8080
 		groupcacheUrlsSlice := strings.Split(groupcacheUrls, ",")
+		// add these nodes to the rediscaches.groupcache.cluster set save in REDIS
+		// convert string list to interface list
+		members := make([]interface{}, len(groupcacheUrlsSlice))
+		for i, v := range groupcacheUrlsSlice {
+			members[i] = v
+		}
+		client.redisClient.SAdd(ctx, GroupCacheClusterNodesUrlKey, members)
 		// the first groupcacheUrl will be this instance groupcache server address
 		groupcacheUrl := groupcacheUrlsSlice[0]
 		// Pool keeps track of peers in our cluster and identifies which peer owns a key.
@@ -116,7 +127,21 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 		// Add more peers to the cluster You MUST Ensure our instance is included in this list else
 		// determining who owns the key accross the cluster will not be consistent, and the pool won't
 		// be able to determine if our instance owns the key.
-		pool.Set(groupcacheUrlsSlice...)
+		// get the urls from REDIS rediscaches.groupcache.cluster set
+		groupcacheNodeUrls, err := client.redisClient.SMembers(ctx, GroupCacheClusterNodesUrlKey).Result()
+		if err != nil {
+			log.Println("Error when get groupcache cluster nodes from REDIS: ", err)
+			// use the input groupcacheUrlsSlice instead of cluster nodes from REDIS
+			pool.Set(groupcacheUrlsSlice...)
+		} else {
+			// check if the current groupcacheUrl is in the groupcacheNodeUrls
+			// if not, add it to the groupcacheNodeUrls
+			if !slices.Contains(groupcacheNodeUrls, groupcacheUrl) {
+				groupcacheNodeUrls = append(groupcacheNodeUrls, groupcacheUrl)
+			}
+			pool.Set(groupcacheNodeUrls...)
+		}
+		client.groupcacheServerUrl = groupcacheUrl
 		serverAddr := strings.SplitN(groupcacheUrl, "://", 2)[1]
 		groupcacheServer = http.Server{
 			Addr:    serverAddr,
@@ -137,7 +162,14 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 				// if not found, redis.Nil error will be return
 				// if found, groupcache will be populated with the cache data
 				// we use pipeline to get the cache data and its TTL at the same time.
-				pipe := client.redisClientReader.Pipeline()
+				var pipe redis.Pipeliner
+				if groupcacheOptions.waitETA > 0 {
+					// there will be a SetNX command to be executed
+					pipe = client.redisClient.Pipeline()
+				} else {
+					// all readonly commands, so we can use the reader client
+					pipe = client.redisClientReader.Pipeline()
+				}
 				getCmd := pipe.Get(ctx, cacheKey)
 				ttlCmd := pipe.TTL(ctx, cacheKey)
 				var setEtaCmd *redis.BoolCmd
@@ -157,7 +189,6 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 							// ETA is set, return redis.Nil right away to indicate cache miss and continue.
 							// this current process has already acquired the lock to populate the cache data to this cache key
 							// other process will wait for the ETA to expire before try to populate the cache data.
-							log.Println("Accquired ETA lock for key: ", cacheKey)
 							return redis.Nil
 						} else {
 							// ETA is not set, this mean another process is populating
@@ -270,16 +301,21 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 	return err
 }
 
-func (client *RedisCacheClient) Close(closeGroupcacheHttpServer bool) error {
+func (client *RedisCacheClient) Close(shutdownCtx context.Context, withGroupcacheServer bool) error {
 	// close redis client
+	if client.groupcacheServerUrl != "" {
+		if err := client.redisClient.SRem(shutdownCtx, GroupCacheClusterNodesUrlKey, client.groupcacheServerUrl).Err(); err != nil {
+			log.Println("Error when remove groupcache server url from REDIS: ", err)
+		}
+	}
 	err1 := client.redisClient.Close()
 	err2 := client.redisClientReader.Close()
-	if closeGroupcacheHttpServer {
-		// for some reason, http.Server.Close() may call os.Exit(1)
+	if client.groupcacheServerUrl != "" && withGroupcacheServer == true {
+		// If fiber http server is already closed, http.Server.Close() will call os.Exit(1)
 		// and will not print the below error message
-		err := groupcacheServer.Close()
+		err := groupcacheServer.Shutdown(shutdownCtx)
 		if err != nil {
-			log.Println("Error when groupcache httpServer.Close(): ", err)
+			log.Println("Error when groupcache httpServer.Shutdown(): ", err)
 		}
 	}
 	// we dont need to close groupcache client as it is not a connection pool

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -103,6 +104,7 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
 }
 
+var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(os.Getenv("HASURA_GRAPHQL_JWT_SECRET"))
 var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type|X-Envoy-External-Address|X-Envoy-Expected-Rq-Timeout-Ms)$`)
 
 func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64) {
@@ -123,14 +125,30 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 		if notCacheHeaderRegex.MatchString(k) {
 			continue
 		}
-		if k == "Authorization" {
-			// TODO: read the JWT token from the request header Authorization
-			// add the user and role to the hash
-			continue
+		if (k == jwtAuthParserConfig.Header.Type || k == "Authorization") && v[:7] == "Bearer " {
+			// TODO: read the JWT token from the request header
+			// extract token from the header by remove "Bearer a"
+			tokenString := string(v[7:])
+			claims, err := jwtAuthParserConfig.ParseJwt(tokenString)
+			if err != nil {
+				log.Error("Failed to parse JWT token: ", err)
+			} else {
+				// convert the entire claims to json string
+				// and add it to the hash
+				// this claims has the timestamp removed already.
+				if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
+					log.Error("Failed to marshal claims: ", err)
+				} else {
+					log.Debug("Compute cache keys with claims: ", claims)
+					h.Write(claimsJsonByteString)
+					// continue to skip this header
+					continue
+				}
+			}
+			// other while this header key and value will be added to the hash as below
 		}
 		// print the header key and value
 		header := k + ":" + v
-
 		headers = append(headers, header)
 	}
 	// sort the header key and value

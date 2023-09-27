@@ -6,6 +6,7 @@ require (
 	github.com/gelmium/graceful-shutdown v0.0.11
 	github.com/gofiber/contrib/otelfiber v1.0.10
 	github.com/gofiber/fiber/v2 v2.48.0
+	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/json-iterator/go v1.1.12
 	github.com/mailgun/groupcache/v2 v2.5.0
 	github.com/redis/go-redis/extra/redisotel/v9 v9.0.5

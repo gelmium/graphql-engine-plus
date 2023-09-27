@@ -477,7 +477,10 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 		redisUrl = os.Getenv("HASURA_GRAPHQL_REDIS_URL")
 	}
 	groupcacheOptions := NewGroupCacheOptions()
-
+	// parse groupcacheOptions.waitETA from env
+	if waitETA, err := strconv.ParseInt(os.Getenv("ENGINE_PLUS_GROUPCACHE_WAIT_ETA"), 10, 64); err == nil && waitETA >= 0 {
+		groupcacheOptions.waitETA = uint64(waitETA)
+	}
 	redisCacheClient, err := NewRedisCacheClient(
 		ctx,
 		redisUrl,
@@ -546,7 +549,7 @@ func main() {
 			if redisCacheClient != nil {
 				// we dont need to close groupcache server as it will be closed
 				// together with the fiber http server
-				return redisCacheClient.Close(false)
+				return redisCacheClient.Close(shutdownCtx, false)
 			} else {
 				return nil
 			}
