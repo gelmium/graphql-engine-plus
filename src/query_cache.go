@@ -105,6 +105,8 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 }
 
 var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(os.Getenv("HASURA_GRAPHQL_JWT_SECRET"))
+
+// TODO: allow this Regex to be configurable via environment variable
 var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type|X-Envoy-External-Address|X-Envoy-Expected-Rq-Timeout-Ms)$`)
 
 func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64) {
@@ -130,6 +132,14 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 			// extract token from the header by remove "Bearer a"
 			tokenString := string(v[7:])
 			claims, err := jwtAuthParserConfig.ParseJwt(tokenString)
+			// remove timestamp from claims
+			delete(claims, "exp")
+			delete(claims, "nbf")
+			delete(claims, "iat")
+			// remove jwt id from claims
+			delete(claims, "jti")
+			// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
+			// the RegEx should be configurable via environment variable
 			if err != nil {
 				log.Error("Failed to parse JWT token: ", err)
 			} else {

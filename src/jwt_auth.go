@@ -52,12 +52,6 @@ func (jwtAuthParserConfig JwtAuthParser) ParseJwt(tokenString string) (jwt.MapCl
 	})
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if ok {
-		// remove timestamp from claims
-		delete(claims, "exp")
-		delete(claims, "nbf")
-		delete(claims, "iat")
-		// remove jwt id from claims
-		delete(claims, "jti")
 		return claims, nil
 	} else {
 		return nil, err

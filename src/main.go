@@ -481,11 +481,41 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	if waitETA, err := strconv.ParseInt(os.Getenv("ENGINE_PLUS_GROUPCACHE_WAIT_ETA"), 10, 64); err == nil && waitETA >= 0 {
 		groupcacheOptions.waitETA = uint64(waitETA)
 	}
+
+	// get list of available addresses
+	localAddress := "127.0.0.1"
+	if os.Getenv("ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE") != "localhost" {
+		addrs, err := net.InterfaceAddrs()
+		if err != nil {
+			log.Error(err)
+		} else {
+			for _, addr := range addrs {
+				if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+					// check if IPv4 or IPv6 is not nil
+					if ipnet.IP.To4() != nil {
+						// get the first ipv4 address to set as localserver address
+						localAddress = ipnet.IP.String()
+						break
+					}
+					if ipnet.IP.To16() != nil {
+						// may skip ipv6 for now
+						log.Debug(ipnet.IP.String())
+					}
+				}
+			}
+		}
+	} else {
+		groupcacheOptions.disableAutoDiscovery = true
+	}
+	groupcacheServerPort := os.Getenv("ENGINE_PLUS_GROUPCACHE_PORT")
+	if groupcacheServerPort == "" {
+		groupcacheServerPort = "8879"
+	}
 	redisCacheClient, err := NewRedisCacheClient(
 		ctx,
 		redisUrl,
 		os.Getenv("HASURA_GRAPHQL_REDIS_READER_URL"),
-		"http://127.0.0.1:8879",
+		"http://"+localAddress+":"+groupcacheServerPort,
 		groupcacheOptions,
 	)
 	if err != nil {
@@ -494,10 +524,10 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	}
 	// ping redis server
 	if err := redisCacheClient.redisClient.Ping(ctx).Err(); err != nil {
-		log.Error("Failed to connect to Redis: ", err)
+		log.Error("Failed to connect to Redis Server: ", err)
 	}
 	if err := redisCacheClient.redisClientReader.Ping(ctx).Err(); err != nil {
-		log.Error("Failed to connect to Redis: ", err)
+		log.Error("Failed to connect to Redis Reader Server: ", err)
 	}
 	log.Info("Connected to Redis Cache")
 	return redisCacheClient
