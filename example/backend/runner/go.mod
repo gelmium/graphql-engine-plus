@@ -3,8 +3,8 @@ module github.com/gelmium/apprunner-example
 go 1.21.0
 
 require (
-	github.com/gelmium/graceful-shutdown v0.0.2
-	github.com/gofiber/fiber/v2 v2.48.0
+	github.com/gelmium/graceful-shutdown v0.0.11
+	github.com/gofiber/fiber/v2 v2.52.4
 	github.com/jackc/pgx/v5 v5.4.3
 	github.com/json-iterator/go v1.1.12
 	github.com/redis/go-redis/v9 v9.1.0

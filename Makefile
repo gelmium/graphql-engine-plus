@@ -21,18 +21,18 @@ up:  ## run the project in local
 	bash scripts/prepare_local_redis.sh
 logs-follow-graphql-engine:
 	docker-compose logs -f graphql-engine
-
-hasura-metadata-export-example-v1:  ## export graphql metadata to yaml files in src/schema/v1
+hasura-console-example-v1:  ## run hasura console for schema v1 localy at port 9695 
+	hasura console --project ./example/graphql-engine/schema/v1 --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --api-port 9693 --no-browser --console-hge-endpoint http://localhost:8000/public/meta
+hasura-metadata-export-example-v1:  ## export graphql metadata to yaml files in example
 	hasura metadata export --project ./example/graphql-engine/schema/v1
-hasura-metadata-apply-example-v1:  ## apply graphql metadata yaml files in src/schema/v1
+hasura-metadata-apply-example-v1:  ## apply graphql metadata yaml files in example
 	hasura metadata apply --project ./example/graphql-engine/schema/v1
-hasura-metadata-show-inconsistent-example-v1:  ## show inconsistent metadata yaml files in src/schema/v1
+hasura-metadata-show-inconsistent-example-v1:  ## show inconsistent metadata yaml files in example
 	hasura metadata inconsistency list --project ./example/graphql-engine/schema/v1
-
-hasura-migratev1-create-migration-from-server:
-	docker-compose exec graphql-engine hasura migrate create "CHANGE-ME" --from-server --database-name default --project ./schema/v1 --schema public
-hasura-deploy-v1:
-	docker-compose exec graphql-engine hasura deploy --project ./schema/v1
+hasura-deploy-example-v1:  ## run migrations and apply graphql metadata yaml files in example
+	hasura deploy --project ./example/graphql-engine/schema/v1
+hasura-migrate-create-migration-from-server-example-v1:
+	hasura migrate create "CHANGE-ME" --from-server --database-name default --schema public --project ./example/graphql-engine/schema/v1
 
 run-migrate-hasura:
 	docker-compose run graphql-engine /root/migrate_hasura.sh
@@ -51,27 +51,24 @@ redis-del-all-data:
 build: $(shell find src -type f)  ## compile and build project
 	mkdir -p build && touch build
 
-LOCAL_DOCKER_IMG_REPO := graphql-engine-plus
+
 ARCH := amd64
 build.out: build  ## build project and output build artifact (docker image/lambda zip file)
 	# Run Build artifact such as: docker container image
 	make build.graphql-engine-plus
-	make build.graphql-engine-plus-nginx
 	touch build.out
 
 build.push: build.out  ## build project and push build artifact (docker image/lambda zip file) to registry
-	docker push $(LOCAL_DOCKER_IMG_REPO):latest
+	docker tag $(LOCAL_DOCKER_IMG_REPO):latest $(REMOTE_DOCKER_IMG_REPO):$(HASURA_VERSION)
+	docker push $(REMOTE_DOCKER_IMG_REPO):$(HASURA_VERSION)
 
 clean:  ## clean up build artifacts
 	rm -rf ./dist ./build
 	rm -f .*.out *.out
 
-HASURA_VERSION := v2.33.4
 build.graphql-engine-plus:
 	cd ./src/;go mod tidy
 	docker build --build-arg="HASURA_GRAPHQL_ENGINE_VERSION=$(HASURA_VERSION)" --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):latest ./src
-build.graphql-engine-plus-nginx:
-	docker build --output=type=docker --platform linux/$(ARCH) -t $(LOCAL_DOCKER_IMG_REPO):nginx-latest -f nginx.Dockerfile ./src
 build.example-runner:
 	cd ./example/backend/runner/;go mod tidy
 	docker build --target=server --progress=plain --output=type=docker --platform linux/$(ARCH) -t apprunner-example:latest ./example/backend/runner

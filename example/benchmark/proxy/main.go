@@ -52,7 +52,7 @@ func setupFiber() *fiber.App {
 			agent.Timeout(28 * time.Second)
 			// loop through the header and set the header from the original request
 			for k, v := range c.GetReqHeaders() {
-				agent.Set(k, v)
+				agent.Set(k, v[0])
 			}
 			agent.Body(c.Body())
 

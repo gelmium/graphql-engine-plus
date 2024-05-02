@@ -663,7 +663,7 @@ class AccessLogger(AbstractAccessLogger):
 
 parser = argparse.ArgumentParser(description="aiohttp scripting-server")
 parser.add_argument("--path")
-parser.add_argument("--port")
+parser.add_argument("--port", type=int)
 
 if __name__ == "__main__":
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())

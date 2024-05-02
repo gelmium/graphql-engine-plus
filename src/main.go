@@ -14,6 +14,7 @@ import (
 	"github.com/gofiber/contrib/otelfiber"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/valyala/fasthttp"
@@ -47,7 +48,7 @@ func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
 		if notForwardHeaderRegex.MatchString(k) {
 			continue
 		}
-		agent.Set(k, v)
+		agent.Set(k, v[0])
 	}
 	// add client IP Address to the end of the X-Forwarded-For header
 	agent.Add("X-Forwarded-For", c.IP())
@@ -167,6 +168,11 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	app.Use(logger.New(logger.Config{
 		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID};${reqHeader:Traceparent}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
+	}))
+
+	// CORS middleware
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*", // TODO: match HASURA_GRAPHQL_CORS_DOMAIN
 	}))
 
 	// Compress middleware, we dont need to use this

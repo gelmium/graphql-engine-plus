@@ -3,8 +3,8 @@ module github.com/gelmium/proxy-benchmark
 go 1.21.0
 
 require (
-	github.com/gelmium/graceful-shutdown v0.0.2
-	github.com/gofiber/fiber/v2 v2.49.1
+	github.com/gelmium/graceful-shutdown v0.0.11
+	github.com/gofiber/fiber/v2 v2.52.4
 )
 
 require (

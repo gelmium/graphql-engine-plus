@@ -59,7 +59,7 @@ func StartGraphqlEngineServers(
 	// create a waitgroup to wait for all cmds to finish
 	var wg sync.WaitGroup
 	// start scripting-server at port 8880
-	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8880")
+	log.Info("Starting scripting-server at unix /tmp/scripting.sock and tcp 8880")
 	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8880")
 	// route the output to stdout
 	cmd0.Stderr = os.Stderr
@@ -199,7 +199,7 @@ func StartGraphqlEngineServers(
 			break
 		}
 	}
-	// Wait for any process to exit, does not matter if it is graphql-engine, python or nginx
+	// Wait for any process to exit, does not matter if it is hasura-graphql-engine or python
 	check := true
 	for loop := true; loop; {
 		// check if ctx is canceled while waiting

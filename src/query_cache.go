@@ -121,45 +121,48 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 	// loop through the header from the original request
 	// and add it to the hash
 	headers := []string{}
-	for k, v := range c.GetReqHeaders() {
-		// filter out the header that we don't want to cache
-		// such as: Host, Connection, ...
-		if notCacheHeaderRegex.MatchString(k) {
-			continue
-		}
-		if (k == jwtAuthParserConfig.Header.Type || k == "Authorization") && v[:7] == "Bearer " {
-			// TODO: read the JWT token from the request header
-			// extract token from the header by remove "Bearer a"
-			tokenString := string(v[7:])
-			claims, err := jwtAuthParserConfig.ParseJwt(tokenString)
-			// remove timestamp from claims
-			delete(claims, "exp")
-			delete(claims, "nbf")
-			delete(claims, "iat")
-			// remove jwt id from claims
-			delete(claims, "jti")
-			// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
-			// the RegEx should be configurable via environment variable
-			if err != nil {
-				log.Error("Failed to parse JWT token: ", err)
-			} else {
-				// convert the entire claims to json string
-				// and add it to the hash
-				// this claims has the timestamp removed already.
-				if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
-					log.Error("Failed to marshal claims: ", err)
-				} else {
-					log.Debug("Compute cache keys with claims: ", claims)
-					h.Write(claimsJsonByteString)
-					// continue to skip this header
-					continue
-				}
+	for k, vList := range c.GetReqHeaders() {
+		// loop through the header values vList
+		for _, v := range vList {
+			// filter out the header that we don't want to cache
+			// such as: Host, Connection, ...
+			if notCacheHeaderRegex.MatchString(k) {
+				continue
 			}
-			// other while this header key and value will be added to the hash as below
+			if (k == jwtAuthParserConfig.Header.Type || k == "Authorization") && v[:7] == "Bearer " {
+				// TODO: read the JWT token from the request header
+				// extract token from the header by remove "Bearer a"
+				tokenString := string(v[7:])
+				claims, err := jwtAuthParserConfig.ParseJwt(tokenString)
+				// remove timestamp from claims
+				delete(claims, "exp")
+				delete(claims, "nbf")
+				delete(claims, "iat")
+				// remove jwt id from claims
+				delete(claims, "jti")
+				// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
+				// the RegEx should be configurable via environment variable
+				if err != nil {
+					log.Error("Failed to parse JWT token: ", err)
+				} else {
+					// convert the entire claims to json string
+					// and add it to the hash
+					// this claims has the timestamp removed already.
+					if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
+						log.Error("Failed to marshal claims: ", err)
+					} else {
+						log.Debug("Compute cache keys with claims: ", claims)
+						h.Write(claimsJsonByteString)
+						// continue to skip this header
+						continue
+					}
+				}
+				// other while this header key and value will be added to the hash as below
+			}
+			// print the header key and value
+			header := k + ":" + v
+			headers = append(headers, header)
 		}
-		// print the header key and value
-		header := k + ":" + v
-		headers = append(headers, header)
 	}
 	// sort the header key and value
 	// to make sure that the hash is always the same
