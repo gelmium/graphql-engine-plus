@@ -39,7 +39,6 @@ var notForwardHeaderRegex = regexp.MustCompile(`(?i)^(Host|Accept-Encoding|Conte
 
 var tracer oteltrace.Tracer
 var propagators propagation.TextMapPropagator
-var otelExporter = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
 func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
 	for k, v := range c.GetReqHeaders() {
@@ -144,20 +143,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		},
 	)
 
-	// get the PATH from environment variable
-	var v1Path = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
-	// default to /public/graphql/v1 if the env is not set
-	if v1Path == "" {
-		v1Path = "/public/graphql/v1"
+	// The API PATH for handlers are defined using environment variable
+	if rwPath == "" {
+		rwPath = "/public/graphql/v1"
 	}
-	// get the PATH from environment variable
-	var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
-	// default to /public/graphql/v1readonly if the env is not set
 	if roPath == "" {
 		roPath = "/public/graphql/v1readonly"
 	}
-	// get the PATH from environment variable
-	var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
 
 	// set logger middleware
 	if os.Getenv("DEBUG") == "true" {
@@ -171,8 +163,11 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	}))
 
 	// CORS middleware
+	if hasuraGqlCorsDomain == "" {
+		hasuraGqlCorsDomain = "*"
+	}
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*", // TODO: match HASURA_GRAPHQL_CORS_DOMAIN
+		AllowOrigins: hasuraGqlCorsDomain,
 	}))
 
 	// Compress middleware, we dont need to use this
@@ -184,10 +179,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	// }))
 
 	// setup opentelemetry middleware for these endpoints
-	if otelExporter == "grpc" || otelExporter == "http" {
+	if engineEnableOtelType == "grpc" || engineEnableOtelType == "http" {
 		app.Use(otelfiber.Middleware(otelfiber.WithNext(func(c *fiber.Ctx) bool {
 			// these endpoints will be traced
-			if c.Path() == v1Path || c.Path() == roPath || (execPath != "" && c.Path() == execPath) {
+			if c.Path() == rwPath || c.Path() == roPath || (execPath != "" && c.Path() == execPath) {
 				return false
 			}
 			// skip for others endpoint
@@ -195,9 +190,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		})))
 	}
 
-	// get the HEALTH_CHECK_PATH from environment variable
-	var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
-	// default to /public/graphql/health if the env is not set
 	if healthCheckPath == "" {
 		healthCheckPath = "/public/graphql/health"
 	}
@@ -243,17 +235,17 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	})
 
 	primaryVsReplicaWeight := 100
-	if os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS") != "" {
+	if hasuraGqlReadReplicaUrls != "" {
 		primaryVsReplicaWeight = 50
 		// parse the primary weight from env, convert it to int
-		primaryWeightInt, err := strconv.Atoi(os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT"))
+		primaryWeightInt, err := strconv.Atoi(engineGqlPvRweight)
 		if err == nil {
 			primaryVsReplicaWeight = primaryWeightInt
 		}
 	}
 
 	// add a POST endpoint to forward request to an upstream url
-	app.Post(v1Path, func(c *fiber.Ctx) error {
+	app.Post(rwPath, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
 		// check if this is read only request
@@ -313,9 +305,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return err
 	})
 
-	// get the PATH from environment variable
-	var engineMetaPath = os.Getenv("ENGINE_PLUS_META_PATH")
-	// default to /public/meta/ if the env is not set
 	if engineMetaPath == "" {
 		engineMetaPath = "/public/meta/"
 	}
@@ -544,7 +533,7 @@ func main() {
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
 	// this must happen as early as possible
-	otelTracerProvider := InitTracerProvider(mainCtx, otelExporter)
+	otelTracerProvider := InitTracerProvider(mainCtx, engineEnableOtelType)
 	// setup resources
 	redisCacheClient := setupRedisClient(mainCtx)
 	// these 2 line need to happen after InitTracerProvider
@@ -552,16 +541,12 @@ func main() {
 	propagators = otel.GetTextMapPropagator()
 	// setup app
 	app := setupFiber(startupCtx, startupReadonlyCtx, redisCacheClient)
-	// get the server Host:Port from environment variable
-	var serverHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")
-	// default to empty string if the env is not set
-	var serverPort = os.Getenv("ENGINE_PLUS_SERVER_PORT")
-	// default to 8000 if the env is not set
-	if serverPort == "" {
-		serverPort = "8000"
+
+	if engineServerPort == "" {
+		engineServerPort = "8000"
 	}
 	// start the http server
-	go app.Listen(serverHost + ":" + serverPort)
+	go app.Listen(engineServerHost + ":" + engineServerPort)
 	// start the engine servers
 	serverShutdownErrorChanel := make(chan error)
 	startServerCtx, startServerCtxCancelFn := context.WithCancel(mainCtx)
@@ -591,7 +576,7 @@ func main() {
 			}
 		}
 	}
-	if otelExporter == "grpc" || otelExporter == "http" {
+	if engineEnableOtelType == "grpc" || engineEnableOtelType == "http" {
 		// add opentelemetry tracer clean-up operation
 		cleanUpOps["opentelemetry-tracer"] = func(shutdownCtx context.Context) error {
 			return otelTracerProvider.Shutdown(shutdownCtx)

@@ -39,8 +39,7 @@ services:
   jaeger:  # this include OTEL collector
     image: jaegertracing/all-in-one
     ports:
-      - "16686:16686"
-      - "4318:4318"
+      - "16686:16686"  # expose Jaeger UI to display traces
     environment:
       - LOG_LEVEL=debug
   graphql-engine:

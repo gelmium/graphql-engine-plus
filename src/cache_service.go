@@ -249,8 +249,8 @@ func NewRedisCacheClient(ctx context.Context, redisUrl string, redisReaderUrl st
 								pipe.Exec(ctx)
 								cacheData, err := checkCmd.Bytes()
 								if err == redis.Nil {
-									// cache data is not populated yet, wait for 50 millisecond
-									time.Sleep(50 * time.Millisecond)
+									// cache data is not populated yet, wait for 3 millisecond
+									time.Sleep(3 * time.Millisecond)
 									continue
 								} else if err != nil {
 									// break out of loop to return original err

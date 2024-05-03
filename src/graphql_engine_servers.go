@@ -102,18 +102,17 @@ func StartGraphqlEngineServers(
 	cmds = append(cmds, cmd1)
 
 	// start graphql-engine with database point to REPLICA, if the env is set
-	if os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS") != "" {
+	if hasuraGqlReadReplicaUrls != "" {
 		metadataDatabaseUrl := os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_URL")
 		if metadataDatabaseUrl == "" {
 			metadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
 		}
 		log.Info("Starting graphql-engine read replica at port 8882")
 		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8882")
-		replicaUrlsString := os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
-		replicaUrlList := strings.Split(replicaUrlsString, ",")
+		replicaUrlList := strings.Split(hasuraGqlReadReplicaUrls, ",")
 		cmd2Env := os.Environ()
 		if len(replicaUrlList) > 1 {
-			// if there are more than 1 urls in HASURA_GRAPHQL_READ_REPLICA_URLS
+			// if there are more than 1 urls in hasuraGqlReadReplicaUrls
 			// each url in replicaUrList must be in a form of ENV_KEY=url
 			cmd2.Env = append(cmd2Env, replicaUrlList...)
 		} else {
@@ -243,8 +242,6 @@ func StartGraphqlEngineServers(
 				shutdownErrorChanel <- nil
 			}
 			close(shutdownErrorChanel)
-			loop = false
-			check = false
 			return
 		default:
 			// loop through all cmds of processes to check if any of them is exited

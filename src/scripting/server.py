@@ -21,10 +21,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from opentelemetry import trace
 from opentelemetry.sdk.trace import Span
-from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry import propagate
 from opentelemetry.propagators.textmap import Getter
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from opentelemetry.propagators.aws import AwsXRayPropagator
 from opentelemetry.instrumentation.aiohttp_client import create_trace_config
 import socket
 
@@ -33,15 +31,15 @@ import socket
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
 exec_cache = {}
-ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
+ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
 # global variable to cache the boto3 session
-if ENGINE_PLUS_ENABLE_BOTO3:
+if ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3:
     boto3_session = aioboto3.Session()
 
 
 # environment variables
-ENGINE_PLUS_ALLOW_EXECURL = os.environ.get("ENGINE_PLUS_ALLOW_EXECURL")
-ENGINE_PLUS_EXECUTE_SECRET = os.environ.get(
+ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
+ENGINE_PLUS_EXECUTE_SECRET = os.getenv(
     "ENGINE_PLUS_EXECUTE_SECRET", os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
 )
 
@@ -51,7 +49,7 @@ json_encoder = msgspec.json.Encoder()
 json_decoder = msgspec.json.Decoder()
 
 # setup telemetry
-otel_exporter_type = os.environ.get("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY", "")
+otel_exporter_type = os.getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY", "")
 ENABLE_OTEL = True
 if otel_exporter_type == "grpc":
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -94,10 +92,9 @@ class AiohttpRequestGetter(Getter):
 
 # Creates a tracer from the global tracer provider
 tracer = trace.get_tracer("graphql-engine-plus")
-# Create propagators and getter
-propagators = CompositePropagator(
-    [TraceContextTextMapPropagator(), AwsXRayPropagator()]
-)
+# Create propagators with default value from environment
+propagators = propagate.get_global_textmap()
+# Create a custom getter for aiohttp request
 requestGetter = AiohttpRequestGetter()
 
 
@@ -465,7 +462,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                 # extract the response status code and body
                 result["primary"] = {"status": resp.status, "body": await resp.text()}
             if (
-                os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS")
+                os.getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
                 and "replica" not in not_include
             ):
                 async with http_session.get(
@@ -505,9 +502,9 @@ async def get_app():
     # Create the HTTP server.
     app = web.Application()
     # init dependencies
-    redis_cluster_url = os.environ.get("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
-    redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
-    redis_reader_url = os.environ.get("HASURA_GRAPHQL_REDIS_READER_URL")
+    redis_cluster_url = os.getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+    redis_url = os.getenv("HASURA_GRAPHQL_REDIS_URL")
+    redis_reader_url = os.getenv("HASURA_GRAPHQL_REDIS_READER_URL")
     if redis_cluster_url:
         app["redis_client"] = app["redis_cluster"] = await redis.RedisCluster.from_url(
             redis_cluster_url
@@ -530,8 +527,8 @@ async def get_app():
     app["json_decoder"] = json_decoder
 
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
-    if ENGINE_PLUS_ENABLE_BOTO3:
-        init_resources = ENGINE_PLUS_ENABLE_BOTO3.split(",")
+    if ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3:
+        init_resources = ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3.split(",")
         # TODO: add support for different region
         context_stack = contextlib.AsyncExitStack()
         app["boto3_context_stack"] = context_stack
