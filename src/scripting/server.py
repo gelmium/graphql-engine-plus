@@ -115,8 +115,6 @@ async def start_as_current_span_async(
         None
     """
     attrs = kwargs.get("attributes", {})
-    # override the service name as this server is embedded in the graphql-engine-plus
-    # attrs["service.name"] = "scripting-server"
     # do context extraction only if request is passed and ENABLE_OTEL is enabled
     if ENABLE_OTEL and request:
         if not kwargs.get("context"):
@@ -151,97 +149,15 @@ def backoff_retry(i):
     return 0.1 * i + random.random() * (3.0 + 0.3 * i)
 
 
-async def exec_script(request: web.Request, body):
+async def exec_script(request: web.Request, config) -> web.Response:
     # for key, value in request.headers.items():
     #     print(f"Header: key={key}, value={value}")
-    # remote execution via proxy
-    execproxy = body.get("execproxy")
-    if execproxy:
-        # remove the execproxy from body, to prevent infinite loop
-        del body["execproxy"]
-        # forward the request to execproxy
-        req_body = json_encoder.encode(body)
-        req_headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "graphql-engine-plus/v1.0.0",
-        }
-        # loop through the request headers and copy to req_headers
-        disallowed_headers = set(
-            list(req_headers.keys()) + ["Host", "Content-Length", "Accept-Encoding"]
-        )
-        for key, value in request.headers.items():
-            if key not in disallowed_headers:
-                req_headers[key] = value
-        # set traces if OTEL is enabled
-        if ENABLE_OTEL:
-            # This will not Remove query params from the URL attribute on the span.
-            trace_config_list = [create_trace_config()]
-        else:
-            trace_config_list = None
-        async with aiohttp.ClientSession(
-            trace_configs=trace_config_list
-        ) as http_session:
-            max_retries = int(body.get("execproxy_max_retries", 15))
-            for i in range(1, max_retries + 1):
-                try:
-                    async with http_session.post(
-                        execproxy, data=req_body, headers=req_headers
-                    ) as resp:
-                        text_body = await resp.text()
-                        # check if the response is 200
-                        if resp.status == 200:
-                            try:
-                                body["payload"] = json_decoder.decode(text_body)
-                            except msgspec.DecodeError:
-                                body["payload"] = text_body
-                            body["execution_time"] = resp.headers.get(
-                                "X-Execution-Time"
-                            )
-                            break
-                        elif resp.status == 429:
-                            # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
-                            # extract the "Retry-After" header
-                            retry_after = resp.headers.get("Retry-After")
-                            if retry_after:
-                                retry_after = min(float(retry_after), 29.0)
-                            else:
-                                retry_after = backoff_retry(i)
-                            logger.info(
-                                f"Rate limited by App Runner, retrying after {retry_after} seconds"
-                            )
-                            body["status_code"] = 429
-                            # retry after advised/random seconds
-                            await asyncio.sleep(retry_after)
-                            continue
-                        else:
-                            logger.error(
-                                f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}"
-                            )
-                            body["status_code"] = resp.status
-                            raise Exception(
-                                f"Error status={resp.status} in forwarding the request to {resp.url}"
-                            )
-                except (aiohttp.ClientOSError, aiohttp.ClientConnectorError) as e:
-                    # these are retryable errors, auto retry right away
-                    await asyncio.sleep(backoff_retry(i))
-                    logger.error(
-                        f"Got {e.__class__.__name__} (tries: {i}) while forwarding the request to {execproxy}: {e.strerror}"
-                    )
-            else:
-                raise Exception(
-                    f"Max retries exceeded ({max_retries}) when forwarding the request to {execproxy}"
-                )
-        # the execution is forwarded to execproxy
-        # so we can return here, body["payload"] is set
-        # with the result of execution from execproxy
-        return
     # local script execution
     exec_main_func = None
-    execfile = body.get("execfile")
+    execfile = config.get("execfile")
     if execfile:
         exec_main_func = exec_cache.get(execfile)
-        if not exec_main_func or body.get("execfresh"):
+        if not exec_main_func or config.get("execfresh"):
             async with start_as_current_span_async(
                 "read-execfile",
                 kind=trace.SpanKind.INTERNAL,
@@ -257,7 +173,7 @@ async def exec_script(request: web.Request, body):
 
     # The `execurl` feature is required only if want to
     # add new script/modify existing script on the fly without deployment
-    execurl = body.get("execurl")
+    execurl = config.get("execurl")
     if ENGINE_PLUS_ALLOW_EXECURL:
         if execurl and not execfile:
             # this is to increase security to prevent unauthorized script execution from URL
@@ -271,7 +187,7 @@ async def exec_script(request: web.Request, body):
                     "The value of header X-Engine-Plus-Execute-Secret is not matched the value of ENGINE_PLUS_EXECUTE_SECRET"
                 )
             exec_main_func = exec_cache.get(execurl)
-            if not exec_main_func or body.get("execfresh"):
+            if not exec_main_func or config.get("execfresh"):
                 async with start_as_current_span_async(
                     "fetch-execurl",
                     kind=trace.SpanKind.INTERNAL,
@@ -294,56 +210,63 @@ async def exec_script(request: web.Request, body):
             "At least one of these parameter must be specified: execfile, execurl"
         )
     try:
-        task = asyncio.get_running_loop().create_task(exec_main_func(request, body))
+        task = asyncio.get_running_loop().create_task(
+            exec_main_func(request, config["body"])
+        )
     except TypeError:
         raise Exception(
             "The script must define this function: `async def main(request, body):`"
         )
-    if getattr(body, "execasync", False):
-        async_tasks.append(task)
-        task.add_done_callback(lambda x: async_tasks.remove(task))
-    else:
-        await task
+    # schedule to run the task and wait for result.
+    return await task
 
 
 async def execute_code_handler(request: web.Request):
     # And execute the Python code.
     # mark starting time
     request.start_time = time.time()
+    config = {
+        "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
+        "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
+        "execfresh": request.headers.get("X-Engine-Plus-Execute-Fresh"),
+    }
     async with start_as_current_span_async(
         "scripting-server: /execute",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
         try:
-            # Get the Python code from the JSON request body
-            body = {}
-            body = json_decoder.decode(await request.text())
+            config["body"] = json_decoder.decode(await request.text())
             parent.set_attribute(
-                "scripting_server.exec", body.get("execfile", body.get("execurl", ""))
+                "scripting_server.exec",
+                config.get("execfile", config.get("execurl", "")),
             )
             parent.set_attribute(
-                "scripting_server.execproxy", body.get("execproxy", "")
+                "scripting_server.execfresh", bool(config.get("execfresh", False))
             )
-            parent.set_attribute(
-                "scripting_server.execfresh", bool(body.get("execfresh", False))
-            )
-            parent.set_attribute(
-                "scripting_server.execasync", bool(body.get("execasync", False))
-            )
-            ### execute the python script in the body
-            await exec_script(request, body)
-            ### the script can modify the body['payload'] to transform the return data
+            ### execute the python script using the configuration
+            result = await exec_script(request, config)
+            # check if result is a web.Response
+            if isinstance(result, web.Response):
+                # calculate the value for X-Execution-Time header
+                x_execution_time = f"{time.time() - request.start_time}"
+                result.headers["X-Execution-Time"] = x_execution_time
+                parent.set_attribute("http.response.status_code", result.status)
+                return result
+            # assume the result is the JSON response and status code is 200
             status_code = 200
-            result = body["payload"]
         except Exception as e:
+            status_code = 400
             if isinstance(e, web.HTTPException):
+                if e.status_code > 0:
+                    parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError)):
-                status_code = body.get("status_code", 400)
+                pass
             else:
-                status_code = body.get("status_code", 500)
                 parent.record_exception(e)
+                status_code = 500
+            # response with format understandable by Hasura
             result = {
                 "error": str(e.__class__.__name__),
                 "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
@@ -353,13 +276,10 @@ async def execute_code_handler(request: web.Request):
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
-        parent.set_attribute("http.status_code", status_code)
+        parent.set_attribute("http.response.status_code", status_code)
         response_body = json_encoder.encode(result)
-        parent.set_attribute("http.response_content_length", len(response_body))
-        # check if the script set the X-Execution-Time header (execproxy)
-        x_execution_time = body.get("execution_time")
-        if not x_execution_time:
-            x_execution_time = f"{time.time() - request.start_time}"
+        # calculate the value for X-Execution-Time header
+        x_execution_time = f"{time.time() - request.start_time}"
         # Return the result of the Python code execution.
         return web.Response(
             status=status_code,
@@ -388,56 +308,56 @@ validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
 async def validate_json_code_handler(request: web.Request):
     # mark starting time
     start_time = time.time()
+    config = {
+        "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
+        "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
+        "execfresh": request.headers.get("X-Engine-Plus-Execute-Fresh"),
+    }
     async with start_as_current_span_async(
         "scripting-server: /validate",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
-        # get the request GET params
-        params = dict(request.query)
         parent.set_attribute(
-            "scripting_server.exec", params.get("execfile", params.get("execurl", ""))
+            "scripting_server.exec", config.get("execfile", config.get("execurl", ""))
         )
         parent.set_attribute(
-            "scripting_server.execfresh", bool(params.get("execfresh", False))
+            "scripting_server.execfresh", bool(config.get("execfresh", False))
         )
         try:
-            # Get the Python code from the params and assign to body
-            payload = validate_json_decoder.decode(await request.text())
-            body = {
-                "payload": payload.data.input,
-                "session": {
-                    "role": payload.role,
-                    "session_variables": payload.session_variables,
-                    "version": payload.version,
-                },
-            }
-            body["execfile"] = params.get("execfile")
-            body["execurl"] = params.get("execurl")
-            body["execfresh"] = params.get("execfresh")
-            ### execute the python script in the body
-            await exec_script(request, body)
-            ### the script can modify the body['payload'] to transform the return data
+            config["body"] = validate_json_decoder.decode(await request.text())
+            ### execute the python script with the configuration
+            result = await exec_script(request, config)
             status_code = 200
-            result = body["payload"]
         except Exception as e:
             status_code = 400
             if isinstance(e, web.HTTPException):
+                if e.status_code > 0:
+                    parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
                 pass
             else:
                 parent.record_exception(e)
+                status_code = 500
             result = {
                 "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
             }
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
-        parent.set_attribute("http.status_code", status_code)
-        response_body = json_encoder.encode(result)
-        parent.set_attribute("http.response_content_length", len(response_body))
+        parent.set_attribute("http.response.status_code", status_code)
         # Return the result of the Python code execution.
+        if status_code == 200:
+            return web.Response(
+                status=status_code,
+                headers={
+                    "Content-type": "text/plain",
+                    "X-Execution-Time": f"{time.time() - start_time}",
+                },
+                body="OK",
+            )
+        response_body = json_encoder.encode(result)
         return web.Response(
             status=status_code,
             headers={
@@ -509,10 +429,10 @@ async def get_app():
         app["redis_client"] = app["redis_cluster"] = await redis.RedisCluster.from_url(
             redis_cluster_url
         )
-        app["redis_client_reader"] = app[
-            "redis_cluster_reader"
-        ] = await redis.RedisCluster.from_url(
-            redis_cluster_url, read_from_replicas=True
+        app["redis_client_reader"] = app["redis_cluster_reader"] = (
+            await redis.RedisCluster.from_url(
+                redis_cluster_url, read_from_replicas=True
+            )
         )
     if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
@@ -593,7 +513,7 @@ async def get_app():
         "botocore",
         "aioboto3",
         "aiobotocore",
-        "gql.transport.aiohttp"
+        "gql.transport.aiohttp",
     ]
     # set log level to ERROR for these loggers to reduce log noise
     for name in disable_loggers:

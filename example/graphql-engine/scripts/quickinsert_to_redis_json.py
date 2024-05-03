@@ -8,11 +8,11 @@ async def main(request: web.Request, body):
     import uuid, logging, msgspec
 
     logger = logging.getLogger("quickinsert_to_redis_json.py")
-    # required params from body
-    params = body["params"]
-    payload = body["payload"]
-    STREAM_MAX_LEN = params.get("STREAM_MAX_LEN", 100000)
-    if "table" not in payload or "object" not in payload["input"]:
+    # required params from query string
+    table_schema = "public"
+    table_name = "customer"
+    STREAM_MAX_LEN = request.query.get("stream_max_len", 100000)
+    if "object" not in body["input"]:
         # ignore this request
         return
 
@@ -22,16 +22,14 @@ async def main(request: web.Request, body):
     except KeyError:
         r = request.app["redis_client"]
     # clone the object json data in payload
-    payload_input_object = payload["input"]["object"]
+    payload_input_object = body["input"]["object"]
     payload_input_object["id"] = str(uuid.uuid4())
     # set auto timestamp key to current epoch
     now = datetime.now(timezone.utc).astimezone()
-    payload_input_object["created_at"] = now.isoformat('T')
+    payload_input_object["created_at"] = now.isoformat("T")
     payload_input_object["updated_at"] = None
     # send the payload to redis stream `audit:$schema.$table:insert` using XADD command
-    stream_key = (
-        f"worker:{payload['table']['schema']}.{payload['table']['name']}:insert"
-    )
+    stream_key = f"worker:{table_schema}.{table_name}:insert"
     logger.info(f"Push object.id={payload_input_object['id']} to stream: {stream_key}")
     await r.xadd(
         stream_key,
@@ -40,6 +38,4 @@ async def main(request: web.Request, body):
         },
         maxlen=STREAM_MAX_LEN,
     )
-
-    body["payload"] = payload_input_object
-    return
+    return payload_input_object

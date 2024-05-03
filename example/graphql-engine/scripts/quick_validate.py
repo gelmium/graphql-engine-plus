@@ -6,9 +6,6 @@ from aiohttp import web
 async def main(request: web.Request, body):
     # import logging
     # logger = logging.getLogger("quick_validate.py")
-    # required params from body
-    payload = body["payload"]
-    # logger.debug(f"body: {body}")
     # validate the input data
     import msgspec
     from typing import Annotated, Optional, List
@@ -25,7 +22,7 @@ async def main(request: web.Request, body):
         created_at: Optional[datetime] = None
         updated_at: Optional[datetime] = None
 
-    for c in msgspec.convert(payload, type=List[InsertCustomer]):
+    for c in msgspec.convert(body.data.input, type=List[InsertCustomer]):
         if c.id is not None:
             raise ValueError("id must not be specified when insert")
         if c.created_at is not None:
@@ -46,4 +43,3 @@ async def main(request: web.Request, body):
       }"""
     )
     result = await graphql_client.execute(query)
-    body["payload"] = result
