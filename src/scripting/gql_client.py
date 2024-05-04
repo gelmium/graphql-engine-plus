@@ -8,7 +8,7 @@ import re
 from opentelemetry import trace
 import logging
 
-logger = logging.getLogger("GqlAsyncClient")
+logger = logging.getLogger("scripting-gql-client")
 server_host = os.getenv("ENGINE_PLUS_SERVER_HOST", "localhost")
 server_port = os.getenv("ENGINE_PLUS_SERVER_PORT", "8000")
 primary_weight_vs_replica = int(

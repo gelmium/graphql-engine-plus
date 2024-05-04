@@ -21,18 +21,19 @@ up:  ## run the project in local
 	bash scripts/prepare_local_redis.sh
 logs-follow-graphql-engine:
 	docker-compose logs -f graphql-engine
+PROJECT := ./example/graphql-engine/schema/v1
 hasura-console-example-v1:  ## run hasura console for schema v1 localy at port 9695 
-	hasura console --project ./example/graphql-engine/schema/v1 --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --api-port 9693 --no-browser --console-hge-endpoint http://localhost:8000/public/meta
+	hasura console --project $(PROJECT) --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --api-port 9693 --no-browser --console-hge-endpoint http://localhost:8000/public/meta
 hasura-metadata-export-example-v1:  ## export graphql metadata to yaml files in example
-	hasura metadata export --project ./example/graphql-engine/schema/v1
+	hasura metadata export --project $(PROJECT)
 hasura-metadata-apply-example-v1:  ## apply graphql metadata yaml files in example
-	hasura metadata apply --project ./example/graphql-engine/schema/v1
+	hasura metadata apply --project $(PROJECT)
 hasura-metadata-show-inconsistent-example-v1:  ## show inconsistent metadata yaml files in example
-	hasura metadata inconsistency list --project ./example/graphql-engine/schema/v1
+	hasura metadata inconsistency list --project $(PROJECT)
 hasura-deploy-example-v1:  ## run migrations and apply graphql metadata yaml files in example
-	hasura deploy --project ./example/graphql-engine/schema/v1
+	hasura deploy --project $(PROJECT)
 hasura-migrate-create-migration-from-server-example-v1:
-	hasura migrate create "CHANGE-ME" --from-server --database-name default --schema public --project ./example/graphql-engine/schema/v1
+	hasura migrate create "CHANGE-ME" --from-server --database-name default --schema public --project $(PROJECT)
 
 run-migrate-hasura:
 	docker-compose run graphql-engine /root/migrate_hasura.sh
@@ -77,7 +78,8 @@ go.run.example-runner:
 go.run.proxy-benchmark:
 	export GOMAXPROCS=8; cd ./example/benchmark/proxy/;go run .
 python.run.scripting-server:
-	cd ./src/scripting/;python3 server.py
+	# load .env file and run python server
+	@set -o allexport; source .env; set +o allexport;cd ./src/scripting/;python3 server.py
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1

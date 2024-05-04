@@ -25,12 +25,13 @@ from opentelemetry import propagate
 from opentelemetry.propagators.textmap import Getter
 from opentelemetry.instrumentation.aiohttp_client import create_trace_config
 import socket
+from exec_cache import InternalExecCache
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
-exec_cache = {}
+exec_cache = InternalExecCache()
 ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
 # global variable to cache the boto3 session
 if ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3:
@@ -42,6 +43,7 @@ ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
 ENGINE_PLUS_EXECUTE_SECRET = os.getenv(
     "ENGINE_PLUS_EXECUTE_SECRET", os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
 )
+DEBUG_MODE = bool(os.getenv("DEBUG"))
 
 logger = logging.getLogger("scripting-server")
 # Pre create json encoder/decoder for server to reuse for every request
@@ -150,75 +152,113 @@ def backoff_retry(i):
 
 
 async def exec_script(request: web.Request, config) -> web.Response:
-    # for key, value in request.headers.items():
-    #     print(f"Header: key={key}, value={value}")
-    # local script execution
-    exec_main_func = None
-    execfile = config.get("execfile")
-    if execfile:
-        exec_main_func = exec_cache.get(execfile)
-        if not exec_main_func or config.get("execfresh"):
-            async with start_as_current_span_async(
-                "read-execfile",
-                kind=trace.SpanKind.INTERNAL,
-            ):
-                with open(os.path.join("/graphql-engine/scripts", execfile), "r") as f:
-                    exec(f.read())
+    async with start_as_current_span_async(
+        "exec-script",
+        kind=trace.SpanKind.INTERNAL,
+    ) as parent:
+        parent.set_attribute(
+            "scripting_server.exec", config.get("execfile", config.get("execurl", ""))
+        )
+        # load script content
+        async with start_as_current_span_async(
+            "load",
+            kind=trace.SpanKind.INTERNAL,
+        ):
+            exec_main_func = None
+            execfile = config.get("execfile")
+            if execfile:
+
+                exec_cache_key = f"exec:{execfile}"
+                if not DEBUG_MODE:
+                    exec_main_func = await exec_cache.get(exec_cache_key)
+                if not exec_main_func:
+                    async with start_as_current_span_async(
+                        "read-execfile",
+                        kind=trace.SpanKind.INTERNAL,
+                    ):
+                        with open(
+                            os.path.join("/graphql-engine/scripts", execfile), "r"
+                        ) as f:
+                            exec_content = f.read()
+                            exec(exec_content)
+                    try:
+                        exec_main_func = locals()["main"]
+                    except KeyError:
+                        raise Exception(
+                            "The script must define this function: `async def main(request, body):`"
+                        )
+                    else:
+                        await exec_cache.setdefault(
+                            exec_cache_key, exec_main_func, exec_content
+                        )
+
+            # The `execurl` feature is required only if want to
+            # add new script/modify existing script on the fly without deployment
+            execurl = config.get("execurl")
+            if ENGINE_PLUS_ALLOW_EXECURL:
+                if execurl and not execfile:
+                    # this is to increase security to prevent unauthorized script execution from URL
+                    req_execute_secret = request.headers.get(
+                        "X-Engine-Plus-Execute-Secret"
+                    )
+                    if not req_execute_secret:
+                        raise ValueError(
+                            "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
+                        )
+                    if req_execute_secret != ENGINE_PLUS_EXECUTE_SECRET:
+                        raise ValueError(
+                            "The value of header X-Engine-Plus-Execute-Secret is not matched the value of ENGINE_PLUS_EXECUTE_SECRET"
+                        )
+                    exec_cache_key = f"exec:{execurl}"
+                    if not DEBUG_MODE:
+                        exec_main_func = await exec_cache.get(exec_cache_key)
+                    if not exec_main_func:
+                        async with start_as_current_span_async(
+                            "fetch-execurl",
+                            kind=trace.SpanKind.INTERNAL,
+                        ):
+                            async with aiohttp.ClientSession() as http_session:
+                                async with http_session.get(
+                                    execurl, headers={"Cache-Control": "no-cache"}
+                                ) as resp:
+                                    exec_content = await resp.text()
+                                    exec(exec_content)
+                        try:
+                            exec_main_func = locals()["main"]
+                        except KeyError:
+                            raise Exception(
+                                "The script must define this function: `async def main(request, body):`"
+                            )
+                        else:
+                            await exec_cache.setdefault(
+                                exec_cache_key, exec_main_func, exec_content
+                            )
+            else:
+                if execurl:
+                    raise Exception(
+                        "To execute script from URL (execurl), you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
+                    )
+        # the script must define this function: `async def main(request, body, transport):`
+        # so it can be executed here in curent context
+        if not exec_main_func:
+            raise Exception(
+                "At least one of these parameter must be specified: execfile, execurl"
+            )
+        # execution of the script
+        async with start_as_current_span_async(
+            "run",
+            kind=trace.SpanKind.INTERNAL,
+        ):
             try:
-                exec_main_func = exec_cache[execfile] = locals()["main"]
-            except KeyError:
+                task = asyncio.get_running_loop().create_task(
+                    exec_main_func(request, config["body"])
+                )
+            except TypeError:
                 raise Exception(
                     "The script must define this function: `async def main(request, body):`"
                 )
-
-    # The `execurl` feature is required only if want to
-    # add new script/modify existing script on the fly without deployment
-    execurl = config.get("execurl")
-    if ENGINE_PLUS_ALLOW_EXECURL:
-        if execurl and not execfile:
-            # this is to increase security to prevent unauthorized script execution from URL
-            req_execute_secret = request.headers.get("X-Engine-Plus-Execute-Secret")
-            if not req_execute_secret:
-                raise ValueError(
-                    "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
-                )
-            if req_execute_secret != ENGINE_PLUS_EXECUTE_SECRET:
-                raise ValueError(
-                    "The value of header X-Engine-Plus-Execute-Secret is not matched the value of ENGINE_PLUS_EXECUTE_SECRET"
-                )
-            exec_main_func = exec_cache.get(execurl)
-            if not exec_main_func or config.get("execfresh"):
-                async with start_as_current_span_async(
-                    "fetch-execurl",
-                    kind=trace.SpanKind.INTERNAL,
-                ):
-                    async with aiohttp.ClientSession() as http_session:
-                        async with http_session.get(
-                            execurl, headers={"Cache-Control": "no-cache"}
-                        ) as resp:
-                            exec(await resp.text())
-                exec_main_func = exec_cache[execurl] = locals()["main"]
-    else:
-        if execurl:
-            raise Exception(
-                "To execute script from URL (execurl), you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
-            )
-    # the script must define this function: `async def main(request, body, transport):`
-    # so it can be executed here in curent context
-    if not exec_main_func:
-        raise Exception(
-            "At least one of these parameter must be specified: execfile, execurl"
-        )
-    try:
-        task = asyncio.get_running_loop().create_task(
-            exec_main_func(request, config["body"])
-        )
-    except TypeError:
-        raise Exception(
-            "The script must define this function: `async def main(request, body):`"
-        )
-    # schedule to run the task and wait for result.
-    return await task
+            # schedule to run the task and wait for result.
+            return await task
 
 
 async def execute_code_handler(request: web.Request):
@@ -228,7 +268,6 @@ async def execute_code_handler(request: web.Request):
     config = {
         "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
         "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
-        "execfresh": request.headers.get("X-Engine-Plus-Execute-Fresh"),
     }
     async with start_as_current_span_async(
         "scripting-server: /execute",
@@ -236,14 +275,11 @@ async def execute_code_handler(request: web.Request):
         request=request,
     ) as parent:
         try:
-            config["body"] = json_decoder.decode(await request.text())
-            parent.set_attribute(
-                "scripting_server.exec",
-                config.get("execfile", config.get("execurl", "")),
-            )
-            parent.set_attribute(
-                "scripting_server.execfresh", bool(config.get("execfresh", False))
-            )
+            async with start_as_current_span_async(
+                "parse-body",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                config["body"] = json_decoder.decode(await request.text())
             ### execute the python script using the configuration
             result = await exec_script(request, config)
             # check if result is a web.Response
@@ -307,25 +343,22 @@ validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
 
 async def validate_json_code_handler(request: web.Request):
     # mark starting time
-    start_time = time.time()
+    request.start_time = time.time()
     config = {
         "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
         "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
-        "execfresh": request.headers.get("X-Engine-Plus-Execute-Fresh"),
     }
     async with start_as_current_span_async(
         "scripting-server: /validate",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
-        parent.set_attribute(
-            "scripting_server.exec", config.get("execfile", config.get("execurl", ""))
-        )
-        parent.set_attribute(
-            "scripting_server.execfresh", bool(config.get("execfresh", False))
-        )
         try:
-            config["body"] = validate_json_decoder.decode(await request.text())
+            async with start_as_current_span_async(
+                "parse-body",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                config["body"] = validate_json_decoder.decode(await request.text())
             ### execute the python script with the configuration
             result = await exec_script(request, config)
             status_code = 200
@@ -353,7 +386,7 @@ async def validate_json_code_handler(request: web.Request):
                 status=status_code,
                 headers={
                     "Content-type": "text/plain",
-                    "X-Execution-Time": f"{time.time() - start_time}",
+                    "X-Execution-Time": f"{time.time() - request.start_time}",
                 },
                 body="OK",
             )
@@ -362,7 +395,7 @@ async def validate_json_code_handler(request: web.Request):
             status=status_code,
             headers={
                 "Content-type": "application/json",
-                "X-Execution-Time": f"{time.time() - start_time}",
+                "X-Execution-Time": f"{time.time() - request.start_time}",
             },
             body=response_body,
         )
@@ -434,10 +467,13 @@ async def get_app():
                 redis_cluster_url, read_from_replicas=True
             )
         )
+        exec_cache.set_redis_instance(app["redis_client"])
     if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
+        exec_cache.set_redis_instance(app["redis_client"])
     if redis_reader_url:
         app["redis_client_reader"] = await redis.from_url(redis_reader_url)
+
     if ENABLE_OTEL and (redis_cluster_url or redis_url or redis_reader_url):
         from opentelemetry.instrumentation.redis import RedisInstrumentor
 

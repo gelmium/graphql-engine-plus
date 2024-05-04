@@ -41,19 +41,11 @@ services:
       postgres:
         condition: service_healthy
     volumes:
+      - ./src/scripting:/graphql-engine/scripting
       - ./example/graphql-engine/schema:/graphql-engine/schema
       - ./example/graphql-engine/scripts:/graphql-engine/scripts
     env_file:
       - ./.env
-  # runner:
-  #   image: apprunner-example:latest
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #   env_file:
-  #     - ./.env
 volumes:
   db_data:
     driver: local

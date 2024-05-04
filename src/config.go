@@ -47,6 +47,9 @@ var engineGqlPvRweight = os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGH
 // default to empty string if the env is not set. (Disable Open Telemetry)
 var engineEnableOtelType = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
+// Set to "true" to enable debug mode
+var debugMode = os.Getenv("DEBUG")
+
 // Below are the environment variables that are also used by Hasura GraphQL Engine
 
 // The CORS domain to allow requests from. By default we enable CORS for all domain.

@@ -18,8 +18,6 @@
   ],
   // the run args will be passed to docker run command
   "runArgs": [
-    "--network-alias",
-    "${devcontainerId}",
     "--label",
     "DEVCONTAINER_REF=${devcontainerId}"
   ],

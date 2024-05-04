@@ -152,7 +152,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	}
 
 	// set logger middleware
-	if os.Getenv("DEBUG") == "true" {
+	if debugMode == "true" {
 		log.SetLevel(log.LevelDebug)
 	} else {
 		log.SetLevel(log.LevelInfo)
@@ -196,10 +196,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	app.Get(healthCheckPath, func(c *fiber.Ctx) error {
 		// check for startupCtx to be done
 		if startupCtx.Err() == nil {
-			log.Warn("Startup has not yet completed, return OK for health check anyway")
+			log.Warn("Startup has not yet completed, return OK for full health check")
+			// any incoming request at this point of time will be waited until startupCtx is done
 			return c.SendStatus(fiber.StatusOK)
 			// Or we can wait for startupCtx to be done here: <-startupCtx.Done()
 		}
+		// startup has completed, we can now do the health check for dependent services
 		var agent *fiber.Agent
 		if startupReadonlyCtx.Err() == nil {
 			// fire GET request to scripting-server to do healthcheck of
@@ -222,14 +224,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	})
 	// standard health check endpoint
 	app.Get("/health", func(c *fiber.Ctx) error {
-		// read GET parameter from sleep from url eg: localhost:3000/health?sleep=30
-		sleep := c.Query("sleep")
-		// ParseInt string sleep to int
-		sleepDuration, err := strconv.ParseInt(sleep, 10, 64)
-		// sleep for the given time, sleepDuration is in microseconds
-		if err == nil && sleepDuration > 0 {
-			// sleep max 110 seconds, as App Runner will always timeout after 120 seconds
-			time.Sleep(time.Duration(min(sleepDuration, 110_000_000)) * time.Microsecond)
+		// check if startupCtx is done
+		if startupCtx.Err() == nil {
+			log.Warn("Startup has not yet completed, return health check not OK")
+			return c.SendStatus(fiber.StatusServiceUnavailable)
 		}
 		return c.SendStatus(fiber.StatusOK)
 	})
