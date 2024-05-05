@@ -281,15 +281,21 @@ async def execute_code_handler(request: web.Request):
             # assume the result is the JSON response and status code is 200
             status_code = 200
         except Exception as e:
+            status_code = 400  # Hasura is expect status code to be either 200 or 400
             if isinstance(e, web.HTTPException):
                 if e.status_code > 0:
                     parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError)):
-                status_code = 400
+                # response with format understandable by Hasura
+                result = {
+                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    "extensions": {
+                        "code": str(e.__class__.__name__),
+                    },
+                }
             else:
                 parent.record_exception(e)
-                status_code = 500
                 # response with format understandable by Hasura
                 result = {
                     "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
@@ -298,7 +304,8 @@ async def execute_code_handler(request: web.Request):
                         "traceback": str(traceback.format_exc()),
                     },
                 }
-            logger.error(result)
+                # log the error response
+                logger.error(result)
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
@@ -353,19 +360,19 @@ async def validate_json_code_handler(request: web.Request):
             result = await exec_script(request, config)
             status_code = 200
         except Exception as e:
+            status_code = 400 # Hasura is expect status code to be either 200 or 400
             if isinstance(e, web.HTTPException):
                 if e.status_code > 0:
                     parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
-                status_code = 400
+                pass
             else:
                 parent.record_exception(e)
-                status_code = 500
-                # response with format understandable by Hasura
-                result = {
-                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-                }
+            # response with format understandable by Hasura
+            result = {
+                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+            }
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))

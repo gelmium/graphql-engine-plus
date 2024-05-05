@@ -80,7 +80,7 @@ go.run.proxy-benchmark:
 python.run.scripting-server:
 	# load .env file and run python server
 	@set -o allexport; source .env; set +o allexport;cd ./src/scripting/;python3 server.py
-F := test.py
+F := test-script.py
 upload-script:
 	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
 
