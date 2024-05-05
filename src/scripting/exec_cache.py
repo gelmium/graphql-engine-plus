@@ -12,6 +12,10 @@ class InternalExecCache(dict):
     def set_redis_instance(self, redis: redis.Redis):
         self.redis = redis
 
+    def __delitem__(self, key) -> None:
+        self.content_length.pop(key, 0)
+        return super().__delitem__(key)
+
     async def get(self, key):
         if hasattr(self, "redis"):
             exec_content = await self.redis.get(key)
@@ -40,7 +44,7 @@ class InternalExecCache(dict):
             exec(exec_content)
             exec_main_func = locals()["main"]
         except KeyError:
-            raise Exception(
+            raise ValueError(
                 "The script must define this function: `async def main(request, body):`"
             )
         else:

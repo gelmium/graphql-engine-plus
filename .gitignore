@@ -6,6 +6,7 @@
 *.log
 report.html
 report*.json
+test-script.py
 # add ignore rules for python
 *.py[cod]
 __pycache__/

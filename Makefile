@@ -48,7 +48,7 @@ run-redis-insight:
 	docker run --rm --name redisinsight -v redisinsight:/db -p 5001:8001 redislabs/redisinsight:latest
 redis-del-all-data:
 	docker-compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
-	
+
 build: $(shell find src -type f)  ## compile and build project
 	mkdir -p build && touch build
 
@@ -80,6 +80,10 @@ go.run.proxy-benchmark:
 python.run.scripting-server:
 	# load .env file and run python server
 	@set -o allexport; source .env; set +o allexport;cd ./src/scripting/;python3 server.py
+F := test.py
+upload-script:
+	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
+
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1

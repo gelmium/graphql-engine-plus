@@ -21,8 +21,15 @@ var rwPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
 var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
 
 // The API PATH for the scripting engine
-// If not set, no public endpoint will be exposed to allow execute scripts
-var execPath = os.Getenv("ENGINE_PLUS_PUBLIC_EXECUTE_PATH")
+// If not set, no public endpoint will be exposed to send request to scripting engine
+// scripting engine can still be used in hasura metadata by using the local endpoint
+// at http://localhost:8880/execute
+// or at http://localhost:8880/validate
+var scriptingPublicPath = os.Getenv("ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
+
+// The secret key to authenticate the request to the scripting engine
+// Must be set if the execPath is set
+var envExecuteSecret = os.Getenv("ENGINE_PLUS_EXECUTE_SECRET")
 
 // The API PATH for the health check endpoint. This endpoint will do health checks
 // of all dependent services, ex: Hasura graphql-engine, Python scripting-engine, etc.

@@ -182,7 +182,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	if engineEnableOtelType == "grpc" || engineEnableOtelType == "http" {
 		app.Use(otelfiber.Middleware(otelfiber.WithNext(func(c *fiber.Ctx) bool {
 			// these endpoints will be traced
-			if c.Path() == rwPath || c.Path() == roPath || (execPath != "" && c.Path() == execPath) {
+			if c.Path() == rwPath || c.Path() == roPath || (scriptingPublicPath != "" && c.Path() == scriptingPublicPath) {
 				return false
 			}
 			// skip for others endpoint
@@ -417,16 +417,15 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	})
 
 	// this endpoint is optional and will only be available if the env is set
-	if execPath != "" {
+	if scriptingPublicPath != "" {
 		// this endpoint expose the scripting-server execute endpoint to public
 		// this allow client to by pass GraphQL engine and execute script directly
 		// be careful when exposing this endpoint to public without a strong security measure
-		app.Post(execPath, func(c *fiber.Ctx) error {
+		app.Post(scriptingPublicPath+"+", func(c *fiber.Ctx) error {
 			// validate the engine plus execute secret
-			headerHasuraAdminSecret := c.Get("X-Engine-Plus-Execute-Secret")
-			envHasuraAdminSecret := os.Getenv("ENGINE_PLUS_EXECUTE_SECRET")
+			headerExecuteSecret := c.Get("X-Engine-Plus-Execute-Secret")
 			// if header is empty or not equal to the env, return 401
-			if headerHasuraAdminSecret == "" || headerHasuraAdminSecret != envHasuraAdminSecret {
+			if headerExecuteSecret == "" || headerExecuteSecret != envExecuteSecret {
 				return fiber.NewError(fiber.StatusUnauthorized, "Unauthorized")
 			}
 			// check and wait for startupCtx to be done
@@ -434,9 +433,9 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			req := c.Request()
 			resp := c.Response()
 			// prepare the proxy request
-			prepareProxyRequest(req, "localhost:8880", "/execute", c.IP())
+			prepareProxyRequest(req, "localhost:8880", c.Params("+"), c.IP())
 			// start tracer span
-			spanCtx, span := tracer.Start(c.UserContext(), "proxy -> scripting-server: /execute",
+			spanCtx, span := tracer.Start(c.UserContext(), "proxy -> scripting-server",
 				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 				oteltrace.WithAttributes(
 					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
@@ -458,6 +457,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			return err
 		})
 	}
+
 	return app
 }
 

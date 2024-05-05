@@ -185,8 +185,10 @@ async def exec_script(request: web.Request, config) -> web.Response:
                         exec_cache_key, exec_content
                     )
 
-            # The `execurl` feature is required only if want to
-            # add new script/modify existing script on the fly without deployment
+            # The execute from URL feature is required only if want to
+            # add/modify existing python script on the fly without deployment
+            # via the Hasura Console. For security reason, this feature is disabled by default
+            # recommend to use /upload endpoint to upload the new/modified script file instead.
             execurl = config.get("execurl")
             if ENGINE_PLUS_ALLOW_EXECURL:
                 if execurl and not execfile:
@@ -196,7 +198,7 @@ async def exec_script(request: web.Request, config) -> web.Response:
                     )
                     if not req_execute_secret:
                         raise ValueError(
-                            "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
+                            "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL"
                         )
                     if req_execute_secret != ENGINE_PLUS_EXECUTE_SECRET:
                         raise ValueError(
@@ -221,16 +223,17 @@ async def exec_script(request: web.Request, config) -> web.Response:
                         )
             else:
                 if execurl:
-                    raise Exception(
-                        "To execute script from URL (execurl), you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
+                    raise ValueError(
+                        "To execute script from URL, you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
                     )
-        # the script must define this function: `async def main(request, body, transport):`
+        
         # so it can be executed here in curent context
         if not exec_main_func:
-            raise Exception(
-                "At least one of these parameter must be specified: execfile, execurl"
+            raise ValueError(
+                "At least one of these headers must be specified: X-Engine-Plus-Execute-File, X-Engine-Plus-Execute-Url"
             )
         # execution of the script
+        # The script must define this function: `async def main(request, body):`
         async with start_as_current_span_async(
             "run",
             kind=trace.SpanKind.INTERNAL,
@@ -240,7 +243,7 @@ async def exec_script(request: web.Request, config) -> web.Response:
                     exec_main_func(request, config["body"])
                 )
             except TypeError:
-                raise Exception(
+                raise ValueError(
                     "The script must define this function: `async def main(request, body):`"
                 )
             # schedule to run the task and wait for result.
@@ -278,22 +281,23 @@ async def execute_code_handler(request: web.Request):
             # assume the result is the JSON response and status code is 200
             status_code = 200
         except Exception as e:
-            status_code = 400
             if isinstance(e, web.HTTPException):
                 if e.status_code > 0:
                     parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError)):
-                pass
+                status_code = 400
             else:
                 parent.record_exception(e)
                 status_code = 500
-            # response with format understandable by Hasura
-            result = {
-                "error": str(e.__class__.__name__),
-                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-                "traceback": str(traceback.format_exc()),
-            }
+                # response with format understandable by Hasura
+                result = {
+                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    "extensions": {
+                        "code": str(e.__class__.__name__),
+                        "traceback": str(traceback.format_exc()),
+                    },
+                }
             logger.error(result)
         # finish the span
         if status_code >= 500:
@@ -349,19 +353,19 @@ async def validate_json_code_handler(request: web.Request):
             result = await exec_script(request, config)
             status_code = 200
         except Exception as e:
-            status_code = 400
             if isinstance(e, web.HTTPException):
                 if e.status_code > 0:
                     parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
-                pass
+                status_code = 400
             else:
                 parent.record_exception(e)
                 status_code = 500
-            result = {
-                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-            }
+                # response with format understandable by Hasura
+                result = {
+                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                }
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
@@ -384,6 +388,75 @@ async def validate_json_code_handler(request: web.Request):
                 "X-Execution-Time": f"{time.time() - request.start_time}",
             },
             body=response_body,
+        )
+
+
+async def upload_script_handler(request: web.Request):
+    async with start_as_current_span_async(
+        "scripting-server: /upload",
+        kind=trace.SpanKind.INTERNAL,
+        request=request,
+    ) as parent:
+        # read file content from request body
+        data = await request.post()
+        script_file = data.get("file")
+        if not script_file:
+            return web.Response(
+                status=400,
+                headers={
+                    "Content-type": "application/json",
+                },
+                body=json_encoder.encode({"message": "file is required"}),
+            )
+        exec_content = script_file.file.read().decode("utf-8")
+        try:
+            async with start_as_current_span_async(
+                "validate-script",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                exec(exec_content)
+                exec_main_func = locals()["main"]
+            async with start_as_current_span_async(
+                "save-script",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                # the script is seem to be a valid python script
+                # we can save it to cache and file system
+                exec_cache_key = f"exec:{script_file.filename}"
+                exec_cache.pop(exec_cache_key, None)
+                await exec_cache.setdefault(
+                    exec_cache_key, exec_main_func, exec_content
+                )
+                # also write to file
+                with open(
+                    os.path.join("/graphql-engine/scripts", script_file.filename), "w"
+                ) as f:
+                    f.write(exec_content)
+            status_code = 200
+            result = {"message": f"Script {script_file.filename} uploaded successfully"}
+        except Exception as e:
+            if isinstance(e, web.HTTPException):
+                if e.status_code > 0:
+                    parent.set_attribute("http.response.status_code", e.status_code)
+                raise e
+            if isinstance(e, KeyError):
+                status_code = 400
+                result = {
+                    "message": "The script must define this function: `async def main(request, body):`",
+                }
+            else:
+                parent.record_exception(e)
+                status_code = 500
+                result = {
+                    "error": str(e.__class__.__name__),
+                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                }
+        return web.Response(
+            status=status_code,
+            headers={
+                "Content-type": "application/json",
+            },
+            body=json_encoder.encode(result),
         )
 
 
@@ -496,6 +569,8 @@ async def get_app():
     app.router.add_post("/execute", execute_code_handler)
     # add validate scripting endpoint
     app.router.add_post("/validate", validate_json_code_handler)
+    # add upload script endpoint
+    app.router.add_post("/upload", upload_script_handler)
 
     # register cleanup on shutdown
     app.on_shutdown.append(cleanup_server)
