@@ -10,7 +10,7 @@ async def main(request: web.Request, body):
     import msgspec
     from typing import Annotated, Optional, List
     from datetime import date, datetime
-    from gql import gql, Client
+    # from gql import gql, Client
 
     class InsertCustomer(msgspec.Struct):
         first_name: str
@@ -32,14 +32,14 @@ async def main(request: web.Request, body):
         if c.first_name == c.last_name:
             raise ValueError("first_name is the same as last_name")
     # you can do more validation using graphql_client or redis_client
-    graphql_client: Client = request.app["graphql_client"]
-    query = gql(
-        """query MyQuery {
-        customer(limit: 1, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-          id
-          last_name
-          first_name
-        }
-      }"""
-    )
-    result = await graphql_client.execute(query)
+    # graphql_client: Client = request.app["graphql_client"]
+    # query = gql(
+    #     """query MyQuery {
+    #     customer(limit: 1, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+    #       id
+    #       last_name
+    #       first_name
+    #     }
+    #   }"""
+    # )
+    # query_result = await graphql_client.execute(query)

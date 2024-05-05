@@ -152,7 +152,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	}
 
 	// set logger middleware
-	if debugMode == "true" {
+	if debugMode {
 		log.SetLevel(log.LevelDebug)
 	} else {
 		log.SetLevel(log.LevelInfo)

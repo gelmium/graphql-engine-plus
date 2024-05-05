@@ -10,12 +10,6 @@ actions:
         - name: X-Engine-Plus-Execute-File
           value: quickinsert_to_redis_json.py
       timeout: 60
-      request_transform:
-        body:
-          action: transform
-          template: '{{$body}}'
-        template_engine: Kriti
-        version: 2
     permissions:
       - role: user
 custom_types:

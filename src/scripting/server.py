@@ -43,7 +43,7 @@ ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
 ENGINE_PLUS_EXECUTE_SECRET = os.getenv(
     "ENGINE_PLUS_EXECUTE_SECRET", os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
 )
-DEBUG_MODE = bool(os.getenv("DEBUG"))
+DEBUG_MODE = os.getenv("DEBUG") in {"true", "True", "yes", "Yes", "1"}
 
 logger = logging.getLogger("scripting-server")
 # Pre create json encoder/decoder for server to reuse for every request
@@ -180,17 +180,10 @@ async def exec_script(request: web.Request, config) -> web.Response:
                             os.path.join("/graphql-engine/scripts", execfile), "r"
                         ) as f:
                             exec_content = f.read()
-                            exec(exec_content)
-                    try:
-                        exec_main_func = locals()["main"]
-                    except KeyError:
-                        raise Exception(
-                            "The script must define this function: `async def main(request, body):`"
-                        )
-                    else:
-                        await exec_cache.setdefault(
-                            exec_cache_key, exec_main_func, exec_content
-                        )
+                    # load script with exec and extract the main function
+                    exec_main_func = await exec_cache.execute_get_main(
+                        exec_cache_key, exec_content
+                    )
 
             # The `execurl` feature is required only if want to
             # add new script/modify existing script on the fly without deployment
@@ -222,17 +215,10 @@ async def exec_script(request: web.Request, config) -> web.Response:
                                     execurl, headers={"Cache-Control": "no-cache"}
                                 ) as resp:
                                     exec_content = await resp.text()
-                                    exec(exec_content)
-                        try:
-                            exec_main_func = locals()["main"]
-                        except KeyError:
-                            raise Exception(
-                                "The script must define this function: `async def main(request, body):`"
-                            )
-                        else:
-                            await exec_cache.setdefault(
-                                exec_cache_key, exec_main_func, exec_content
-                            )
+                        # load script with exec and extract the main function
+                        exec_main_func = await exec_cache.execute_get_main(
+                            exec_cache_key, exec_content
+                        )
             else:
                 if execurl:
                     raise Exception(

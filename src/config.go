@@ -48,7 +48,8 @@ var engineGqlPvRweight = os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGH
 var engineEnableOtelType = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
 // Set to "true" to enable debug mode
-var debugMode = os.Getenv("DEBUG")
+var _d = os.Getenv("DEBUG")
+var debugMode = _d == "true" || _d == "True" || _d == "yes" || _d == "Yes" || _d == "1"
 
 // Below are the environment variables that are also used by Hasura GraphQL Engine
 
