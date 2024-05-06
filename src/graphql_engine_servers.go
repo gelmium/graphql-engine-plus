@@ -103,12 +103,12 @@ func StartGraphqlEngineServers(
 
 	// start graphql-engine with database point to REPLICA, if the env is set
 	if hasuraGqlReadReplicaUrls != "" {
-		metadataDatabaseUrl := os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_URL")
-		if metadataDatabaseUrl == "" {
-			metadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
+		// if HASURA_GRAPHQL_METADATA_DATABASE_URL is not specified use HASURA_GRAPHQL_DATABASE_URL
+		if hasuraGqlMetadataDatabaseUrl == "" {
+			hasuraGqlMetadataDatabaseUrl = hasuraGqlDatabaseUrl
 		}
 		log.Info("Starting graphql-engine read replica at port 8882")
-		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8882")
+		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", hasuraGqlMetadataDatabaseUrl, "serve", "--server-port", "8882")
 		replicaUrlList := strings.Split(hasuraGqlReadReplicaUrls, ",")
 		cmd2Env := os.Environ()
 		if len(replicaUrlList) > 1 {

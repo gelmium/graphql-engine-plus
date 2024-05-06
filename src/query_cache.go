@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -104,7 +103,7 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
 }
 
-var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(os.Getenv("HASURA_GRAPHQL_JWT_SECRET"))
+var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(hasuraGqlJwtSecret)
 
 // TODO: allow this Regex to be configurable via environment variable
 var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type|X-Envoy-External-Address|X-Envoy-Expected-Rq-Timeout-Ms)$`)

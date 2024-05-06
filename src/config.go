@@ -28,8 +28,11 @@ var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
 var scriptingPublicPath = os.Getenv("ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
 
 // The secret key to authenticate the request to the scripting engine
-// Must be set if the execPath is set
+// Must be set if the scriptingPublicPath is set
 var envExecuteSecret = os.Getenv("ENGINE_PLUS_EXECUTE_SECRET")
+
+var _epae = os.Getenv("ENGINE_PLUS_ALLOW_EXECURL")
+var allowExecuteUrl = _epae == "true" || _epae == "True" || _epae == "yes" || _epae == "Yes" || _epae == "1"
 
 // The API PATH for the health check endpoint. This endpoint will do health checks
 // of all dependent services, ex: Hasura graphql-engine, Python scripting-engine, etc.
@@ -71,4 +74,20 @@ var hasuraGqlCorsDomain = os.Getenv("HASURA_GRAPHQL_CORS_DOMAIN")
 // primary & replica server using the round-robin with the weight defined in enviroment
 // if the query is a write query, it will only route to the primary server
 // default to empty string if the env is not set
+// In a multiple databases setup, you need to pass each database url in a comma
+// separated string, follow this format: ENV_KEY1=DB_URL1,ENV_KEY2=DB_URL2,...
+// where the ENV_KEY1 represent the environment variable name to configure for DB1
 var hasuraGqlReadReplicaUrls = os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
+
+// The database URL for the primary database
+// In a multiple databases setup, this env doesnt need to be set. Instead
+// You can configure the DB URL for each database using a custom environment variable
+// For example: ENV_KEY1=DB_URL1,ENV_KEY2=DB_URL2,...
+var hasuraGqlDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
+
+// The database URL for the metadata database
+// If this env is not set, the server will use the primary database url hasuraGqlDatabaseUrl
+var hasuraGqlMetadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_URL")
+
+// The jwt secret config for the Hasura GraphQL Engine
+var hasuraGqlJwtSecret = os.Getenv("HASURA_GRAPHQL_JWT_SECRET")

@@ -82,7 +82,7 @@ python.run.scripting-server:
 	@set -o allexport; source .env; set +o allexport;cd ./src/scripting/;python3 server.py
 F := test-script.py
 upload-script:
-	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
+	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -F "file=@test-script2.py" -F "file=@test-script3.py" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
 
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus

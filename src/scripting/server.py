@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 import random
@@ -32,17 +33,13 @@ from exec_cache import InternalExecCache
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
 exec_cache = InternalExecCache()
-ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
-# global variable to cache the boto3 session
-if ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3:
-    boto3_session = aioboto3.Session()
-
-
 # environment variables
+ENGINE_PLUS_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
+if ENGINE_PLUS_ENABLE_BOTO3:
+    # this is a global variable to reuse the boto3 session
+    boto3_session = aioboto3.Session()
 ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
-ENGINE_PLUS_EXECUTE_SECRET = os.getenv(
-    "ENGINE_PLUS_EXECUTE_SECRET", os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
-)
+ENGINE_PLUS_EXECUTE_SECRET = os.getenv("ENGINE_PLUS_EXECUTE_SECRET")
 DEBUG_MODE = os.getenv("DEBUG") in {"true", "True", "yes", "Yes", "1"}
 
 logger = logging.getLogger("scripting-server")
@@ -167,7 +164,6 @@ async def exec_script(request: web.Request, config) -> web.Response:
             exec_main_func = None
             execfile = config.get("execfile")
             if execfile:
-
                 exec_cache_key = f"exec:{execfile}"
                 if not DEBUG_MODE:
                     exec_main_func = await exec_cache.get(exec_cache_key)
@@ -184,7 +180,7 @@ async def exec_script(request: web.Request, config) -> web.Response:
                     exec_main_func = await exec_cache.execute_get_main(
                         exec_cache_key, exec_content
                     )
-
+            # Execute script from an URL (execurl), only if execfile is not provided
             # The execute from URL feature is required only if want to
             # add/modify existing python script on the fly without deployment
             # via the Hasura Console. For security reason, this feature is disabled by default
@@ -226,8 +222,8 @@ async def exec_script(request: web.Request, config) -> web.Response:
                     raise ValueError(
                         "To execute script from URL, you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
                     )
-        
-        # so it can be executed here in curent context
+        # exec_main_func must be loaded before this line so
+        # it can be executed here in curent context
         if not exec_main_func:
             raise ValueError(
                 "At least one of these headers must be specified: X-Engine-Plus-Execute-File, X-Engine-Plus-Execute-Url"
@@ -360,7 +356,7 @@ async def validate_json_code_handler(request: web.Request):
             result = await exec_script(request, config)
             status_code = 200
         except Exception as e:
-            status_code = 400 # Hasura is expect status code to be either 200 or 400
+            status_code = 400  # Hasura is expect status code to be either 200 or 400
             if isinstance(e, web.HTTPException):
                 if e.status_code > 0:
                     parent.set_attribute("http.response.status_code", e.status_code)
@@ -398,6 +394,39 @@ async def validate_json_code_handler(request: web.Request):
         )
 
 
+def exec_and_verify_script(exec_content: str):
+    try:
+        exec(exec_content)
+        exec_main_func = locals()["main"]
+    except Exception as e:
+        if isinstance(e, KeyError):
+            raise ValueError(
+                "The script must define this function `async def main(request: aiohttp.web_request.Request, body):`"
+            )
+        if isinstance(e, SyntaxError):
+            raise ValueError(
+                f"The script has SyntaxError at loc <{e.lineno}:{e.offset}>"
+            )
+        else:
+            raise e
+    if not inspect.iscoroutinefunction(exec_main_func):
+        raise ValueError(
+            "The main function must be an async function `async def main(request: aiohttp.web_request.Request, body):"
+        )
+    signature = inspect.signature(exec_main_func)
+    if str(signature) not in {
+        "(request: aiohttp.web_request.Request, body)",
+        "(request: aiohttp.web_request.Request, body) -> aiohttp.web_response.Response",
+    }:
+        logger.error(
+            f"Invalid signature of main function when upload script: {signature}"
+        )
+        raise ValueError(
+            "The main function must be defined with this signature `async def main(request: aiohttp.web_request.Request, body) -> aiohttp.web_response.Response:"
+        )
+    return exec_main_func
+
+
 async def upload_script_handler(request: web.Request):
     async with start_as_current_span_async(
         "scripting-server: /upload",
@@ -406,58 +435,64 @@ async def upload_script_handler(request: web.Request):
     ) as parent:
         # read file content from request body
         data = await request.post()
-        script_file = data.get("file")
-        if not script_file:
+        upload_file_list = data.getall("file")
+        if len(upload_file_list) == 0:
             return web.Response(
                 status=400,
                 headers={
                     "Content-type": "application/json",
                 },
-                body=json_encoder.encode({"message": "file is required"}),
+                body=json_encoder.encode({"message": "At least 1 `file` is required"}),
             )
-        exec_content = script_file.file.read().decode("utf-8")
-        try:
-            async with start_as_current_span_async(
-                "validate-script",
-                kind=trace.SpanKind.INTERNAL,
-            ):
-                exec(exec_content)
-                exec_main_func = locals()["main"]
-            async with start_as_current_span_async(
-                "save-script",
-                kind=trace.SpanKind.INTERNAL,
-            ):
-                # the script is seem to be a valid python script
-                # we can save it to cache and file system
-                exec_cache_key = f"exec:{script_file.filename}"
-                exec_cache.pop(exec_cache_key, None)
-                await exec_cache.setdefault(
-                    exec_cache_key, exec_main_func, exec_content
-                )
-                # also write to file
-                with open(
-                    os.path.join("/graphql-engine/scripts", script_file.filename), "w"
-                ) as f:
-                    f.write(exec_content)
-            status_code = 200
-            result = {"message": f"Script {script_file.filename} uploaded successfully"}
-        except Exception as e:
-            if isinstance(e, web.HTTPException):
-                if e.status_code > 0:
-                    parent.set_attribute("http.response.status_code", e.status_code)
-                raise e
-            if isinstance(e, KeyError):
-                status_code = 400
-                result = {
-                    "message": "The script must define this function: `async def main(request, body):`",
-                }
-            else:
-                parent.record_exception(e)
-                status_code = 500
-                result = {
-                    "error": str(e.__class__.__name__),
-                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-                }
+        result = {"success": [], "message": ""}
+        status_code = 200
+        for script_file in upload_file_list:
+            exec_content = script_file.file.read().decode("utf-8")
+            try:
+                async with start_as_current_span_async(
+                    "validate-script",
+                    kind=trace.SpanKind.INTERNAL,
+                ):
+                    exec_main_func = exec_and_verify_script(exec_content)
+                async with start_as_current_span_async(
+                    "save-script",
+                    kind=trace.SpanKind.INTERNAL,
+                ):
+                    # the script is seem to be a valid python script
+                    # we can save it to cache and file system
+                    exec_cache_key = f"exec:{script_file.filename}"
+                    exec_cache.pop(exec_cache_key, None)
+                    await exec_cache.setdefault(
+                        exec_cache_key, exec_main_func, exec_content
+                    )
+                    # also write to file
+                    with open(
+                        os.path.join("/graphql-engine/scripts", script_file.filename),
+                        "w",
+                    ) as f:
+                        f.write(exec_content)
+                result["success"].append(script_file.filename)
+            except Exception as e:
+                if isinstance(e, web.HTTPException):
+                    if e.status_code > 0:
+                        parent.set_attribute("http.response.status_code", e.status_code)
+                    raise e
+                if isinstance(e, ValueError):
+                    status_code = 400
+                    result[
+                        "message"
+                    ] += f"Error in {script_file.filename}: {e.args[0]},"
+                else:
+                    parent.record_exception(e)
+                    status_code = 500
+                    result = {
+                        "error": str(e.__class__.__name__),
+                        "message": str(
+                            getattr(e, "msg", e.args[0] if len(e.args) else e)
+                        ),
+                    }
+                    break
+        # result
         return web.Response(
             status=status_code,
             headers={
@@ -549,8 +584,8 @@ async def get_app():
     app["json_decoder"] = json_decoder
 
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
-    if ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3:
-        init_resources = ENGINE_PLUS_SCRIPTING_ENABLE_BOTO3.split(",")
+    if ENGINE_PLUS_ENABLE_BOTO3:
+        init_resources = ENGINE_PLUS_ENABLE_BOTO3.split(",")
         # TODO: add support for different region
         context_stack = contextlib.AsyncExitStack()
         app["boto3_context_stack"] = context_stack

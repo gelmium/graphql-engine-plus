@@ -428,6 +428,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			if headerExecuteSecret == "" || headerExecuteSecret != envExecuteSecret {
 				return fiber.NewError(fiber.StatusUnauthorized, "Unauthorized")
 			}
+			// check if the header X-Engine-Plus-Execute-Url is present
+			// when allowExecuteUrl is false, if yes return 403
+			if !allowExecuteUrl && c.Get("X-Engine-Plus-Execute-Url") != "" {
+				return fiber.NewError(fiber.StatusForbidden, "Forbidden")
+			}
+
 			// check and wait for startupCtx to be done
 			waitForStartupToBeCompleted(startupCtx)
 			req := c.Request()
