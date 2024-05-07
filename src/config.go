@@ -19,6 +19,7 @@ var rwPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
 
 // The API PATH for the readonly queries
 // default to /public/graphql/v1readonly if the env is not set
+// request send to this path will be routed between primary and replica
 var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
 
 // The API PATH for the scripting engine
@@ -44,7 +45,7 @@ var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
 // default to /public/meta/ if the env is not set
 var engineMetaPath = os.Getenv("ENGINE_PLUS_META_PATH")
 
-// The weight to round-robin between primary and replica
+// The weight to route request between primary and replica
 // The value must be between 0 and 100. 100 mean all queries will go to primary
 // 0 mean all queries will go to replica. The default value is 50.
 // This value is only used if the HASURA_GRAPHQL_READ_REPLICA_URLS is set
@@ -92,7 +93,7 @@ var hasuraGqlCorsDomain = os.Getenv("HASURA_GRAPHQL_CORS_DOMAIN")
 // If this env is set, the server will start another Hasura GraphQL Engine server
 // which configure to the read-replica database. The engine plus will check if the
 // graphql query is a read-only query, it will route the query to the both
-// primary & replica server using the round-robin with the weight defined in enviroment
+// primary & replica server using the weight defined in enviroment
 // if the query is a write query, it will only route to the primary server
 // default to empty string if the env is not set
 // In a multiple databases setup, you need to pass each database url in a comma
@@ -127,5 +128,6 @@ var hasuraGqlRedisClusterUrl = os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
 
 // The maximum allowed cache TTL for a query
 // If the query has ttl value greater than this max value, the cache will use this max value
-// Default to 0 seconds if the env is not set (TODO: fix as Hasura Cloud)
+// Default to 3600 seconds if the env is not set (same as Hasura Cloud)
+// Set this value to 0 will disable query caching
 var hasuraGqlCacheMaxEntryTtl, hasuraGqlCacheMaxEntryTtlParseErr = strconv.ParseUint(os.Getenv("HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL"), 10, 64)

@@ -48,8 +48,8 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	if redisCachedResponseResult.ContentEncoding != "" {
 		c.Set("Content-Encoding", redisCachedResponseResult.ContentEncoding)
 	}
-	c.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
-	c.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
+	c.Set("X-Hasura-Query-Cache-Key", FormatCacheKey(cacheKey))
+	c.Set("X-Hasura-Query-Family-Cache-Key", FormatFamilyKey(familyCacheKey))
 	// caculate max-age based on the cache expiresAt
 	maxAge := redisCachedResponseResult.ExpiresAt - time.Now().Unix()
 	if maxAge < 0 {
@@ -98,8 +98,8 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 		span.RecordError(err)
 		return
 	}
-	resp.Header.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
-	resp.Header.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
+	resp.Header.Set("X-Hasura-Query-Cache-Key", FormatCacheKey(cacheKey))
+	resp.Header.Set("X-Hasura-Query-Family-Cache-Key", FormatFamilyKey(familyCacheKey))
 	resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
 }
 
@@ -178,5 +178,13 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 }
 
 func CreateRedisKey(familyKey uint64, cacheKey uint64) string {
-	return "graphql-engine-plus:" + strconv.FormatUint(familyKey, 36) + ":" + strconv.FormatUint(cacheKey, 36)
+	return "graphql-engine-plus:" + FormatFamilyKey(familyKey) + ":" + FormatCacheKey(cacheKey)
+}
+
+func FormatFamilyKey(familyKey uint64) string {
+	return strconv.FormatUint(familyKey, 36)
+}
+
+func FormatCacheKey(cacheKey uint64) string {
+	return strconv.FormatUint(cacheKey, 36)
 }

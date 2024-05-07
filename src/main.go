@@ -23,8 +23,22 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// App Runner will always timeout after 120 seconds
+// Set a hard timeout after 110 seconds
 const UPSTREAM_TIME_OUT = 110 * time.Second
+
+// Set a hard timeout for read
+const FIBER_READ_TIME_OUT = 30 * time.Second
+
+// Set a hard timeout for write
+const FIBER_WRITE_TIME_OUT = 30 * time.Second
+
+// keep-alive is enabled by default, connection is keep alive after serving a request
+// if there is no incoming request after 120 seconds it will be closed
+const FIBER_IDLE_TIME_OUT = 120 * time.Second
+
+// The total time allowed for all process to gracefully shutdown
+// Should set to a number equal or greater than READ_TIME_OUT
+const GRACEFUL_SHUTDOWN_TIMEOUT = 30 * time.Second
 
 func waitForStartupToBeCompleted(startupCtx context.Context) {
 	if startupCtx.Err() == nil {
@@ -132,9 +146,9 @@ var JsoniterConfigFastest = jsoniter.Config{
 func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, redisCacheClient *RedisCacheClient) *fiber.App {
 	app := fiber.New(
 		fiber.Config{
-			ReadTimeout:  60 * time.Second,
-			WriteTimeout: 60 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			ReadTimeout:  FIBER_READ_TIME_OUT,
+			WriteTimeout: FIBER_WRITE_TIME_OUT,
+			IdleTimeout:  FIBER_IDLE_TIME_OUT,
 			JSONEncoder:  JsoniterConfigFastest.Marshal,
 			JSONDecoder:  JsoniterConfigFastest.Unmarshal,
 			ServerHeader: "graphql-engine-plus/v1.0.0",
@@ -149,6 +163,16 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	if roPath == "" {
 		roPath = "/public/graphql/v1readonly"
 	}
+	if healthCheckPath == "" {
+		healthCheckPath = "/public/graphql/health"
+	}
+	if engineMetaPath == "" {
+		engineMetaPath = "/public/meta/"
+	} else if engineMetaPath[len(engineMetaPath)-1:] != "/" {
+		// check if metadataPath end with /
+		// if not, add / to the end of metadataPath.
+		engineMetaPath = engineMetaPath + "/"
+	}
 
 	// set logger middleware
 	if debugMode {
@@ -159,6 +183,14 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	app.Use(logger.New(logger.Config{
 		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID};${reqHeader:Traceparent}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
 		TimeFormat: "2006-01-02T15:04:05.000000",
+		// skip health check endpoints
+		Next: func(c *fiber.Ctx) bool {
+			// Next defines a function to skip this middleware when returned true.
+			if c.Path() == healthCheckPath || c.Path() == "/health" {
+				return true
+			}
+			return false
+		},
 	}))
 
 	// CORS middleware
@@ -189,9 +221,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		})))
 	}
 
-	if healthCheckPath == "" {
-		healthCheckPath = "/public/graphql/health"
-	}
 	app.Get(healthCheckPath, func(c *fiber.Ctx) error {
 		// check for startupCtx to be done
 		if startupCtx.Err() == nil {
@@ -302,39 +331,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return err
 	})
 
-	if engineMetaPath == "" {
-		engineMetaPath = "/public/meta/"
-	}
-	// check if metadataPath end with /
-	// if not, add / to the end of metadataPath.
-	if engineMetaPath[len(engineMetaPath)-1:] != "/" {
-		engineMetaPath = engineMetaPath + "/"
-	}
-	// add a POST endpoint to forward request to an upstream url
-	app.Post(engineMetaPath+"+", func(c *fiber.Ctx) error {
-		// check and wait for startupCtx to be done
-		waitForStartupToBeCompleted(startupCtx)
-		// fire a POST request to the upstream url using the same header and body from the original request
-		// any path after /public/meta/ will be appended to the upstream url
-		// allow any type of request to be sent to the hasura graphql engine
-		// for ex: /public/meta/v1/metadata -> /v1/metadata
-		// for ex: /public/meta/v2/query -> /v2/query
-		// read more here: https://hasura.io/docs/latest/api-reference/overview/
-		agent := fiber.Post("http://localhost:8881/" + c.Params("+"))
-		// send request to upstream without caching
-		return sendRequestToUpstream(c, agent)
-	})
-	// add a GET endpoint to forward request to an upstream url
-	app.Get(engineMetaPath+"+", func(c *fiber.Ctx) error {
-		// check and wait for startupCtx to be done
-		waitForStartupToBeCompleted(startupCtx)
-		// for ex: GET /public/meta/v1/version -> /v1/version
-		// fire a GET request to the upstream url using the same header and body from the original request
-		agent := fiber.Get("http://localhost:8881/" + c.Params("+"))
-		// send request to upstream without caching
-		return sendRequestToUpstream(c, agent)
-	})
-
 	// add a POST endpoint to forward request to an upstream url
 	app.Post(roPath, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
@@ -415,6 +411,31 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return err
 	})
 
+	// add a POST endpoint to forward request to an upstream url
+	app.Post(engineMetaPath+"+", func(c *fiber.Ctx) error {
+		// check and wait for startupCtx to be done
+		waitForStartupToBeCompleted(startupCtx)
+		// fire a POST request to the upstream url using the same header and body from the original request
+		// any path after /public/meta/ will be appended to the upstream url
+		// allow any type of request to be sent to the hasura graphql engine
+		// for ex: /public/meta/v1/metadata -> /v1/metadata
+		// for ex: /public/meta/v2/query -> /v2/query
+		// read more here: https://hasura.io/docs/latest/api-reference/overview/
+		agent := fiber.Post("http://localhost:8881/" + c.Params("+"))
+		// send request to upstream without caching
+		return sendRequestToUpstream(c, agent)
+	})
+	// add a GET endpoint to forward request to an upstream url
+	app.Get(engineMetaPath+"+", func(c *fiber.Ctx) error {
+		// check and wait for startupCtx to be done
+		waitForStartupToBeCompleted(startupCtx)
+		// for ex: GET /public/meta/v1/version -> /v1/version
+		// fire a GET request to the upstream url using the same header and body from the original request
+		agent := fiber.Get("http://localhost:8881/" + c.Params("+"))
+		// send request to upstream without caching
+		return sendRequestToUpstream(c, agent)
+	})
+
 	// this endpoint is optional and will only be available if the env is set
 	if scriptingPublicPath != "" {
 		// this endpoint expose the scripting-server execute endpoint to public
@@ -478,8 +499,6 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	// set groupcacheOptions.waitETA using value from env
 	if engineGroupcacheWaitEtaParseErr == nil {
 		groupcacheOptions.waitETA = engineGroupcacheWaitEta
-	} else {
-		log.Error("Failed to parse engineGroupcacheWaitEta: ", engineGroupcacheWaitEtaParseErr)
 	}
 
 	// get list of available addresses
@@ -555,14 +574,13 @@ func main() {
 
 	// register engine-servers & http-server clean-up operations
 	// then wait for termination signal to do the clean-up
-	shutdownTimeout := 30 * time.Second
 	cleanUpOps := map[string]gfshutdown.Operation{
 		"engine-servers": func(shutdownCtx context.Context) error {
 			startServerCtxCancelFn()
 			return <-serverShutdownErrorChanel
 		},
 		"http-server": func(shutdownCtx context.Context) error {
-			return app.ShutdownWithTimeout(shutdownTimeout - 1*time.Second)
+			return app.ShutdownWithTimeout(GRACEFUL_SHUTDOWN_TIMEOUT - 1*time.Second)
 		},
 		// Add other cleanup operations here
 	}
@@ -583,7 +601,7 @@ func main() {
 			return otelTracerProvider.Shutdown(shutdownCtx)
 		}
 	}
-	wait := gfshutdown.GracefulShutdown(mainCtx, shutdownTimeout, cleanUpOps)
+	wait := gfshutdown.GracefulShutdown(mainCtx, GRACEFUL_SHUTDOWN_TIMEOUT, cleanUpOps)
 	exitCode := <-wait
 	log.Info("GraphQL Engine Plus is shutdown")
 	os.Exit(exitCode)

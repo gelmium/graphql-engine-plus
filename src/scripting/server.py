@@ -40,7 +40,7 @@ if ENGINE_PLUS_ENABLE_BOTO3:
     boto3_session = aioboto3.Session()
 ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
 ENGINE_PLUS_EXECUTE_SECRET = os.getenv("ENGINE_PLUS_EXECUTE_SECRET")
-DEBUG_MODE = os.getenv("DEBUG") in {"true", "True", "yes", "Yes", "1"}
+DEBUG_MODE = os.getenv("DEBUG", "").lower() in {"true", "t", "1"}
 
 logger = logging.getLogger("scripting-server")
 # Pre create json encoder/decoder for server to reuse for every request

@@ -47,7 +47,7 @@ func (req *GraphQLRequest) IsSubscriptionGraphQLRequest() bool {
 func (req *GraphQLRequest) IsCachedQueryGraphQLRequest() int {
 	// According to Hasura default max ttl is 3600 seconds
 	maxTTL := 3600
-	if hasuraGqlCacheMaxEntryTtlParseErr != nil {
+	if hasuraGqlCacheMaxEntryTtlParseErr == nil {
 		maxTTL = int(hasuraGqlCacheMaxEntryTtl)
 	}
 	// check if the query is a subscription with regex
