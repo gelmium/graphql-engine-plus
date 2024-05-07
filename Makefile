@@ -82,14 +82,14 @@ python.run.scripting-server:
 	@set -o allexport; source .env; set +o allexport;cd ./src/scripting/;python3 server.py
 F := test-script.py
 upload-script:
-	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -F "file=@test-script2.py" -F "file=@test-script3.py" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
+	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
 
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:8000/public/graphql/v1
-	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 1000, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1readonly
-	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1000, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1
-	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1000, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1readonly
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 1, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1readonly
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:8000/public/graphql/v1readonly
 	
 test.graphql-engine-plus.mutation:
 	# fire a curl request to graphql-engine-plus

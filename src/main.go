@@ -1,4 +1,3 @@
-// FILEPATH: /workspaces/graphql-engine-plus/src/proxy/container_start.go
 package main
 
 import (
@@ -471,49 +470,47 @@ var redisUrlRemoveUnexpectedOptionRegex = regexp.MustCompile(`(?i)(\?)?&?(ssl_ce
 
 func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	// setup redis client
-	redisUrl := os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
-	if redisUrl == "" {
-		redisUrl = os.Getenv("HASURA_GRAPHQL_REDIS_URL")
+
+	if hasuraGqlRedisUrl == "" && hasuraGqlRedisClusterUrl == "" {
+		return nil
 	}
 	groupcacheOptions := NewGroupCacheOptions()
-	// parse groupcacheOptions.waitETA from env
-	if waitETA, err := strconv.ParseInt(os.Getenv("ENGINE_PLUS_GROUPCACHE_WAIT_ETA"), 10, 64); err == nil && waitETA >= 0 {
-		groupcacheOptions.waitETA = uint64(waitETA)
+	// set groupcacheOptions.waitETA using value from env
+	if engineGroupcacheWaitEtaParseErr == nil {
+		groupcacheOptions.waitETA = engineGroupcacheWaitEta
+	} else {
+		log.Error("Failed to parse engineGroupcacheWaitEta: ", engineGroupcacheWaitEtaParseErr)
 	}
 
 	// get list of available addresses
 	localAddress := "127.0.0.1"
-	if os.Getenv("ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE") != "localhost" {
-		addrs, err := net.InterfaceAddrs()
+	if engineGroupcacheClusterMode == "aws_ec2" {
+		// get the local ipv4 address of the ec2 instance via the meta-data url
+		address, err := GetIpFromAwsEc2Metadata()
 		if err != nil {
 			log.Error(err)
 		} else {
-			for _, addr := range addrs {
-				if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-					// check if IPv4 or IPv6 is not nil
-					if ipnet.IP.To4() != nil {
-						// get the first ipv4 address to set as localserver address
-						localAddress = ipnet.IP.String()
-						break
-					}
-					if ipnet.IP.To16() != nil {
-						// may skip ipv6 for now
-						log.Debug(ipnet.IP.String())
-					}
-				}
-			}
+			localAddress = address
+		}
+	} else if engineGroupcacheClusterMode == "host_ipnet" {
+		address, err := GetIpFromHostNetInterfaces()
+		if err != nil {
+			log.Error(err)
+		} else {
+			localAddress = address
 		}
 	} else {
 		groupcacheOptions.disableAutoDiscovery = true
 	}
-	groupcacheServerPort := os.Getenv("ENGINE_PLUS_GROUPCACHE_PORT")
+
 	if groupcacheServerPort == "" {
 		groupcacheServerPort = "8879"
 	}
 	redisCacheClient, err := NewRedisCacheClient(
 		ctx,
-		redisUrl,
-		os.Getenv("HASURA_GRAPHQL_REDIS_READER_URL"),
+		hasuraGqlRedisClusterUrl,
+		hasuraGqlRedisUrl,
+		hasuraGqlRedisReaderUrl,
 		"http://"+localAddress+":"+groupcacheServerPort,
 		groupcacheOptions,
 	)

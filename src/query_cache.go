@@ -92,7 +92,7 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	cacheData = append(cacheData, cacheMeta...)
 	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
-	if err := redisCacheClient.Set(ctx, redisKey, cacheData, time.Duration(ttl)*time.Second,
+	if err := redisCacheClient.Set(ctx, redisKey, cacheData, ttl,
 		TraceOptions{tracer, spanCtx}); err != nil {
 		log.Error("Failed to save cache to redis: ", err)
 		span.RecordError(err)

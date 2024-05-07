@@ -42,7 +42,6 @@ services:
         condition: service_healthy
     volumes:
       - ./src/scripting:/graphql-engine/scripting
-      - ./example/graphql-engine/schema:/graphql-engine/schema
       - ./example/graphql-engine/scripts:/graphql-engine/scripts
     env_file:
       - ./.env

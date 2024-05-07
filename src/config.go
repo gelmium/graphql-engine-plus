@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 )
 
 // The server Host name to listen on
@@ -31,8 +32,8 @@ var scriptingPublicPath = os.Getenv("ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
 // Must be set if the scriptingPublicPath is set
 var envExecuteSecret = os.Getenv("ENGINE_PLUS_EXECUTE_SECRET")
 
-var _epae = os.Getenv("ENGINE_PLUS_ALLOW_EXECURL")
-var allowExecuteUrl = _epae == "true" || _epae == "True" || _epae == "yes" || _epae == "Yes" || _epae == "1"
+// Set to true to enable execute from url for the scripting engine
+var allowExecuteUrl, _ = strconv.ParseBool(os.Getenv("ENGINE_PLUS_ALLOW_EXECURL"))
 
 // The API PATH for the health check endpoint. This endpoint will do health checks
 // of all dependent services, ex: Hasura graphql-engine, Python scripting-engine, etc.
@@ -58,8 +59,28 @@ var engineGqlPvRweight = os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGH
 var engineEnableOtelType = os.Getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
 
 // Set to "true" to enable debug mode
-var _d = os.Getenv("DEBUG")
-var debugMode = _d == "true" || _d == "True" || _d == "yes" || _d == "Yes" || _d == "1"
+var debugMode, _ = strconv.ParseBool(os.Getenv("DEBUG"))
+
+// The port to be used by the groupcache server to enhance the query caching
+// default to 8879 if the env is not set
+var groupcacheServerPort = os.Getenv("ENGINE_PLUS_GROUPCACHE_PORT")
+
+// The cluster mode to be used by the groupcache server for automatic discovery
+// There are 2 available modes:
+// 1. "aws_ec2": This mode will use the AWS EC2 metadata to get the local ipv4 address
+// 2. "host_net": This mode will use the current host network interfaces to get the local ipv4 address
+// if not set, auto discovery will be disabled and the groupcache server will use 127.0.0.1 as the server address
+var engineGroupcacheClusterMode = os.Getenv("ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE")
+
+// The maximum wait time for the groupcache client to wait for the cache owner to populate the cache data
+// by seting it > 0, the others process will wait up to engineGroupcacheWaitEta seconds for
+// the first process (cache owner) to populate the cache data to redis and then the others process will
+// retrieve the data from the redis cache once it is already populated.
+// this feature will help avoid the thundering herd problem. value default to 1 seconds.
+// Note: can set to 0 to disable this feature, this give the cache the best performance.
+// Recommended to always leave this on even when engineGroupcacheClusterMode is not set.
+// Only disable it when your setup always have only 1 node running.
+var engineGroupcacheWaitEta, engineGroupcacheWaitEtaParseErr = strconv.ParseUint(os.Getenv("ENGINE_PLUS_GROUPCACHE_WAIT_ETA"), 10, 64)
 
 // Below are the environment variables that are also used by Hasura GraphQL Engine
 
@@ -91,3 +112,20 @@ var hasuraGqlMetadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_U
 
 // The jwt secret config for the Hasura GraphQL Engine
 var hasuraGqlJwtSecret = os.Getenv("HASURA_GRAPHQL_JWT_SECRET")
+
+// The redis URL used by GraphQL Engine Plus for query caching
+// This env is used by Hasura Cloud only, not the CE version
+var hasuraGqlRedisUrl = os.Getenv("HASURA_GRAPHQL_REDIS_URL")
+
+// The redis URL used by GraphQL Engine Plus for query caching (read only)
+// Note: Hasura Cloud may not use this env
+var hasuraGqlRedisReaderUrl = os.Getenv("HASURA_GRAPHQL_REDIS_READER_URL")
+
+// The redis cluster URL used by GraphQL Engine Plus for query caching
+// Note: Hasura Cloud  may not use this env
+var hasuraGqlRedisClusterUrl = os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+
+// The maximum allowed cache TTL for a query
+// If the query has ttl value greater than this max value, the cache will use this max value
+// Default to 0 seconds if the env is not set (TODO: fix as Hasura Cloud)
+var hasuraGqlCacheMaxEntryTtl, hasuraGqlCacheMaxEntryTtlParseErr = strconv.ParseUint(os.Getenv("HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL"), 10, 64)
