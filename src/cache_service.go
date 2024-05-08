@@ -199,6 +199,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 					oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 					oteltrace.WithAttributes(
 						attribute.String("cache.key", cacheKey),
+						attribute.String("groupcache.server_url", client.groupcacheServerUrl),
 					))
 				defer span.End()
 				// This GetterFunc will be invoked when the cacheKey is not found locally in the current groupcache node
@@ -264,8 +265,6 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 								))
 							defer waitETALoopSpan.End()
 							for time.Now().UnixMilli() < eta {
-								// TODO: implement these wait lock check with sync.Map and sync.Locker
-								// 99.9% case the wait will happend on 2 go routines of the same groupcache node
 								// check for cache data is populated
 								pipe := client.redisClientReader.Pipeline()
 								checkCmd := pipe.Get(waitSpanCtx, cacheKey)
@@ -273,8 +272,8 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 								pipe.Exec(waitSpanCtx)
 								cacheData, err := checkCmd.Bytes()
 								if err == redis.Nil {
-									// cache data is not populated yet, wait for 3 millisecond
-									time.Sleep(3 * time.Millisecond)
+									// cache data is not populated yet, wait for 5 millisecond
+									time.Sleep(5 * time.Millisecond)
 									// check if getter function ctx is cancelled after sleep
 									if getterFuncSpanCtx.Err() != nil {
 										return getterFuncSpanCtx.Err()
@@ -387,6 +386,18 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 	if !(ttl == -1 || ttl > 0) {
 		return fmt.Errorf("invalid TTL, value must be -1 or greater than 0. Actual value: %d", ttl)
 	}
+	// set the cache data to redis
+	// Default to no expiry
+	expiration := time.Duration(0)
+	if ttl > 0 {
+		expiration = time.Duration(ttl) * time.Second
+	}
+	err := client.redisClient.Set(spanCtx, key, value, expiration).Err()
+	if err != nil {
+		// If unable to set the cache data to redis, return the error right away
+		// We are not going to save to groupcache if redis set failed
+		return err
+	}
 	// if groupcache is enabled, use it to set the cache data
 	if client.groupcacheClient != nil {
 		// Default to no expiry
@@ -407,13 +418,6 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 		}
 		spanGroupcache.End()
 	}
-	// set the cache data to redis
-	// Default to no expiry
-	expiration := time.Duration(0)
-	if ttl > 0 {
-		expiration = time.Duration(ttl) * time.Second
-	}
-	err := client.redisClient.Set(spanCtx, key, value, expiration).Err()
 	return err
 }
 
