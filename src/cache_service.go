@@ -9,9 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/mailgun/groupcache/v2"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -22,6 +26,8 @@ type RedisCacheClient struct {
 	groupcacheClient    *groupcache.Group
 	groupcacheServerUrl string
 	groupcacheServer    http.Server
+	// OTEL tracer
+	tracer oteltrace.Tracer
 }
 
 const GroupCacheClusterNodesUrlKey = "rediscaches.groupcache.cluster"
@@ -29,7 +35,6 @@ const GroupCacheClusterNodesUrlKey = "rediscaches.groupcache.cluster"
 type GroupcacheOptions struct {
 	// default to 60MiB
 	cacheMaxSize int64
-
 	// by seting it > 0, the others process will wait up to ETA seconds for first process to populate the cache data
 	// this will avoid the thundering herd problem. value default to 1 seconds.
 	waitETA uint64
@@ -63,7 +68,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 			// init the redis client for read cache
 			client.redisClientReader = redis.NewClusterClient(readOnlyClusterOpt)
 		} else {
-			log.Print("Failed to parse Redis Cluster URL: ", err)
+			slog.Error("Failed to parse Redis Cluster URL: ", err)
 			return nil, err
 		}
 	} else {
@@ -71,11 +76,11 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 		if opt, err := redis.ParseURL(redisUrl); err == nil {
 			rdb := redis.NewClient(opt)
 			if err := redisotel.InstrumentTracing(rdb); err != nil {
-				log.Print("Failed to instrument tracing Redis Client: ", err)
+				slog.Error("Failed to instrument tracing Redis Client: ", err)
 			}
 			client.redisClient = rdb
 		} else {
-			log.Print("Failed to parse Redis URL: ", err)
+			slog.Error("Failed to parse Redis URL: ", err)
 			return nil, err
 		}
 		// init the redis client for read cache
@@ -86,24 +91,17 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 		if opt, err := redis.ParseURL(redisReaderUrl); err == nil {
 			rdb := redis.NewClient(opt)
 			if err := redisotel.InstrumentTracing(rdb); err != nil {
-				log.Print("Failed to instrument tracing Redis Client: ", err)
+				slog.Error("Failed to instrument tracing Redis Client: ", err)
 			}
 			client.redisClientReader = rdb
 		} else {
-			log.Print("Failed to parse Redis Reader URL: ", err)
+			slog.Error("Failed to parse Redis Reader URL: ", err)
 			return nil, err
 		}
 	}
-
-	// TODO: Enable metrics instrumentation.
-	// if err := redisotel.InstrumentMetrics(client.redisClient); err != nil {
-	// 	log.Print("Failed to instrument metrics Redis Client: ", err)
-	// }
-	// // Enable metrics instrumentation.
-	// if err := redisotel.InstrumentMetrics(client.redisClientReader); err != nil {
-	// 	log.Print("Failed to instrument metrics Redis Client Reader: ", err)
-	// }
-
+	// Setup OTEL tracing
+	client.tracer = otel.Tracer("cache-service")
+	// TODO: Setup OTEL metrics
 	if groupcacheUrls != "" {
 		// split the groupcacheUrls string into a slice of string by comma
 		// ex: http://192.168.1.1:8080, http://192.168.1.2:8080, http://192.168.1.3:8080
@@ -130,7 +128,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 			// get the urls from REDIS rediscaches.groupcache.cluster set
 			groupcacheNodeUrls, err := client.redisClient.SMembers(ctx, GroupCacheClusterNodesUrlKey).Result()
 			if err != nil {
-				log.Println("Error when get groupcache cluster nodes from REDIS: ", err)
+				slog.Error("Error when get groupcache cluster nodes from REDIS: ", err)
 				// use the input groupcacheUrlsSlice instead of cluster nodes from REDIS
 				pool.Set(groupcacheUrlsSlice...)
 			} else {
@@ -160,7 +158,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 								// if client is already closed, exit the loop
 								return
 							}
-							log.Println("Error when get groupcache cluster nodes from REDIS: ", err)
+							slog.Error("Error when get groupcache cluster nodes from REDIS: ", err)
 						} else {
 							// check if the current groupcacheUrl is in the groupcacheNodeUrls
 							// if not, add it to the groupcacheNodeUrls
@@ -168,7 +166,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 								groupcacheNodeUrls = append(groupcacheNodeUrls, groupcacheUrl)
 							}
 							if !slices.Equal(currentGroupcacheNodeUrls, groupcacheNodeUrls) {
-								log.Println("Updating groupcache cluster with new nodes, length =", len(groupcacheNodeUrls))
+								slog.Info("Updating groupcache cluster with new nodes", "length", len(groupcacheNodeUrls))
 								pool.Set(groupcacheNodeUrls...)
 								currentGroupcacheNodeUrls = groupcacheNodeUrls
 							}
@@ -182,11 +180,11 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 		serverAddr := strings.SplitN(groupcacheUrl, "://", 2)[1]
 		client.groupcacheServer = http.Server{
 			Addr:    serverAddr,
-			Handler: pool,
+			Handler: otelhttp.NewHandler(pool, "groupcache-server"),
 		}
 		// Start a HTTP server to listen for peer requests from the groupcache
 		go func() {
-			log.Printf("Groupcache server listening on %s\n", serverAddr)
+			slog.Info("Starting groupcache server", "serverAddr", serverAddr)
 			if err := client.groupcacheServer.ListenAndServe(); err != nil {
 				log.Fatal(err)
 			}
@@ -195,6 +193,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 		// Create a new group cache with a max cache size
 		client.groupcacheClient = groupcache.NewGroup("rediscaches", groupcacheOptions.cacheMaxSize, groupcache.GetterFunc(
 			func(ctx context.Context, cacheKey string, dest groupcache.Sink) error {
+				traceOpts := TraceOptions{client.tracer, ctx}
 				// This GetterFunc will be invoked when the cacheKey is not found locally in the current groupcache node
 				// groupcache will try to invoke this only once (not guaranteed) if there are multiple
 				// requests with the same cacheKey at the same time. (avoid thundering herd problem)
@@ -202,12 +201,19 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 				// In Graphql Engine Plus, this ussualy got invoke twice: the first call acquired a lock and
 				// return redis.Nil then try to populate cache with the response data from the Hasura GraphQL Engine
 				// the second call will wait for the lock to be released and get the cache data from redis
-				log.Printf("GetterFunc is called for cache key: %s\n", cacheKey)
+				slog.Debug("GetterFunc is called for cache key", "cacheKey", cacheKey)
 				// Try to get the cache data from redis
 				// if not found, redis.Nil error will be return
 				// if found, groupcache will be populated with the cache data
 				// we use pipeline to get the cache data and its TTL at the same time.
 				var pipe redis.Pipeliner
+				_, pipeCmdSpan := traceOpts.tracer.Start(traceOpts.ctx, "Pipeline.Exec",
+					oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+					oteltrace.WithAttributes(
+						attribute.String("cache.cmd1", "GET"),
+						attribute.String("cache.cmd2", "TTL"),
+						attribute.String("cache.key", cacheKey),
+					))
 				if groupcacheOptions.waitETA > 0 {
 					// there will be a SetNX command to be executed
 					pipe = client.redisClient.Pipeline()
@@ -220,6 +226,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 				var setEtaCmd *redis.BoolCmd
 				var defaultEta int64
 				if groupcacheOptions.waitETA > 0 {
+					pipeCmdSpan.SetAttributes(attribute.String("cache.cmd3", "SETNX"))
 					// if waitETA >0, we will try to do ETA lock to wait for the cache data to be populated
 					setEtaCmd = pipe.SetNX(ctx, cacheKey+"-rediscaches.ETA",
 						time.Now().Add(time.Duration(groupcacheOptions.waitETA)*time.Second).UnixMilli(),
@@ -227,6 +234,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 					defaultEta = time.Now().Add(time.Duration(groupcacheOptions.waitETA) * time.Second).UnixMilli()
 				}
 				pipe.Exec(ctx)
+				pipeCmdSpan.End()
 				cacheData, originalErr := getCmd.Bytes()
 				// originalErr can be redis.Nil or other error (redis server issue or network error)
 				if originalErr != nil {
@@ -238,7 +246,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 							// ETA is set, return redis.Nil right away to indicate cache miss and continue.
 							// this current process has already acquired the lock to populate the cache data to this cache key
 							// other process will wait for the ETA to expire before try to populate the cache data.
-							log.Printf("Accquired lock to set cache key: %s\n", cacheKey)
+							slog.Debug("Accquired lock to set cache key", "cacheKey", cacheKey)
 							return originalErr // redis.Nil
 						} else {
 							// ETA is not set, this mean another process is populating
@@ -247,10 +255,17 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 							eta, err := client.redisClientReader.Get(ctx, cacheKey+"-rediscaches.ETA").Int64()
 							if err != nil {
 								// there is an error when get ETA, set ETA to the defaultETA
-								log.Println("Error when get the cache key wait ETA from REDIS: ", err)
+								slog.Error("Error when get the cache key wait ETA from REDIS: ", err)
 								eta = defaultEta
 							}
 							// Wait loop check til ETA
+							_, waitETALoopSpan := traceOpts.tracer.Start(traceOpts.ctx, "Pipeline.Exec",
+								oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+								oteltrace.WithAttributes(
+									attribute.String("cache.key", cacheKey),
+									attribute.Int64("waitETA", eta),
+								))
+							defer waitETALoopSpan.End()
 							for time.Now().UnixMilli() < eta {
 								// check for cache data is populated
 								pipe := client.redisClientReader.Pipeline()
@@ -268,7 +283,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 									continue
 								} else if err != nil {
 									// break out of loop to return original err
-									log.Println("Error when wait for cache to be populated: ", err)
+									slog.Error("Error when wait for cache to be populated: ", err)
 									break
 								} else {
 									// cache data is populated, set the cache data to groupcache
@@ -283,14 +298,13 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 											expire = time.Now().Add(time.Duration(ttl))
 										}
 										// Set cache data in the groupcache to expire after TTL seconds
-										log.Printf("Set cache key to dest: %s, expire: %v\n", cacheKey, expire)
-										log.Printf("len cache data: %d\n", len(cacheData))
+										slog.Debug("Set cache key to dest", "cacheKey", cacheKey, "expire", expire)
 										// must always call this function if return value is nil
 										return dest.SetBytes(cacheData, expire)
 									}
 								}
 							}
-							log.Printf("Timeout while wait for cache key: %s to be populated, eta: %d\n", cacheKey, eta)
+							slog.Debug("Timeout while wait for cache key to be populated", "cacheKey", cacheKey, "eta", eta)
 						}
 					}
 					return originalErr
@@ -302,8 +316,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 					expire = time.Now().Add(time.Duration(ttl))
 				}
 				// Set cache data in the groupcache to expire after TTL seconds
-				log.Printf("Set cache key to dest (redis cache hit): %s, expire: %v\n", cacheKey, expire)
-				log.Printf("len cache data: %d\n", len(cacheData))
+				slog.Debug("Set cache key to dest (redis cache hit)", "cacheKey", cacheKey, "expire", expire)
 				// must always call this function if return value is nil
 				return dest.SetBytes(cacheData, expire)
 			},
@@ -313,7 +326,8 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 }
 
 // cache get using available client
-func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts TraceOptions) ([]byte, error) {
+func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, error) {
+	traceOpts := TraceOptions{client.tracer, ctx}
 	// start tracer span
 	_, span := traceOpts.tracer.Start(traceOpts.ctx, "RedisCacheClient.Get",
 		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
@@ -327,7 +341,13 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts T
 		// if not, groupcacheClient will call the groupcache.GetterFunc to get the cache data from redis
 		// if not found, redis.Nil error will be return.
 		var cacheData []byte
+		_, spanGroupcache := traceOpts.tracer.Start(traceOpts.ctx, "groupcache.Get",
+			oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+			oteltrace.WithAttributes(
+				attribute.String("cache.key", key),
+			))
 		err := client.groupcacheClient.Get(ctx, key, groupcache.AllocatingByteSliceSink(&cacheData))
+		spanGroupcache.End()
 		if err != nil {
 			span.SetAttributes(attribute.Bool("cache.hit", false))
 			return nil, err
@@ -336,7 +356,13 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts T
 		return cacheData, nil
 	} else {
 		// if groupcache is not enabled, use redisClient
+		_, spanRedis := traceOpts.tracer.Start(traceOpts.ctx, "GET",
+			oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+			oteltrace.WithAttributes(
+				attribute.String("cache.key", key),
+			))
 		cacheData, err := client.redisClientReader.Get(ctx, key).Bytes()
+		spanRedis.End()
 		if err != nil {
 			span.SetAttributes(attribute.Bool("cache.hit", false))
 			return nil, err
@@ -348,10 +374,8 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string, traceOpts T
 
 // cache set using available client
 // the value must be encoded to []byte before calling this function
-func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byte, ttl int, traceOpts TraceOptions) error {
-	if !(ttl == -1 || ttl > 0) {
-		return fmt.Errorf("invalid TTL, value must be -1 or greater than 0. Actual value: %d", ttl)
-	}
+func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byte, ttl int) error {
+	traceOpts := TraceOptions{client.tracer, ctx}
 	// start tracer span
 	_, span := traceOpts.tracer.Start(traceOpts.ctx, "RedisCacheClient.Set",
 		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
@@ -360,19 +384,28 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 			attribute.Int("cache.ttl", ttl),
 		))
 	defer span.End() // end tracer span
+	if !(ttl == -1 || ttl > 0) {
+		return fmt.Errorf("invalid TTL, value must be -1 or greater than 0. Actual value: %d", ttl)
+	}
 	// if groupcache is enabled, use it to set the cache data
 	if client.groupcacheClient != nil {
 		// run this in a goroutine for faster response
 		// cache will be set to redis any way
 		go func() {
 			// Default to no expiry
+			_, spanGroupcache := traceOpts.tracer.Start(traceOpts.ctx, "groupcache.Set",
+				oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+				oteltrace.WithAttributes(
+					attribute.String("cache.key", key),
+				))
+			defer spanGroupcache.End()
 			expire := time.Time{}
 			if ttl > 0 {
 				expire = time.Now().Add(time.Duration(ttl) * time.Second)
 			}
-			log.Printf("Set cache key: %s, expire: %v\n", key, expire)
+			slog.Debug("Set cache key", "cacheKey", key, "expire", expire)
 			if err := client.groupcacheClient.Set(ctx, key, value, expire, false); err != nil {
-				log.Println("Error when groupcache.Set: ", err)
+				slog.Error("Error when groupcache.Set: ", err)
 			}
 		}()
 	}
@@ -382,7 +415,13 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 	if ttl > 0 {
 		expiration = time.Duration(ttl) * time.Second
 	}
+	_, spanRedis := traceOpts.tracer.Start(traceOpts.ctx, "SET",
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+		oteltrace.WithAttributes(
+			attribute.String("cache.key", key),
+		))
 	err := client.redisClient.Set(ctx, key, value, expiration).Err()
+	spanRedis.End()
 	return err
 }
 
@@ -390,7 +429,7 @@ func (client *RedisCacheClient) Close(shutdownCtx context.Context, withGroupcach
 	// close redis client
 	if client.groupcacheServerUrl != "" {
 		if err := client.redisClient.SRem(shutdownCtx, GroupCacheClusterNodesUrlKey, client.groupcacheServerUrl).Err(); err != nil {
-			log.Println("Error when remove groupcache server url from REDIS: ", err)
+			slog.Error("Error when remove groupcache server url from REDIS: ", err)
 		}
 	}
 	err1 := client.redisClient.Close()
@@ -400,7 +439,7 @@ func (client *RedisCacheClient) Close(shutdownCtx context.Context, withGroupcach
 		// and will not print the below error message
 		err := client.groupcacheServer.Shutdown(shutdownCtx)
 		if err != nil {
-			log.Println("Error when groupcache httpServer.Shutdown(): ", err)
+			slog.Error("Error when groupcache httpServer.Shutdown(): ", err)
 		}
 	}
 	// we dont need to close groupcache client as it is not a connection pool

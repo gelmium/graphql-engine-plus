@@ -68,7 +68,7 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 
 func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64, traceOpts TraceOptions) {
 	// start tracer span
-	spanCtx, span := traceOpts.tracer.Start(traceOpts.ctx, "ReadResponseBodyAndSaveToCache",
+	_, span := traceOpts.tracer.Start(traceOpts.ctx, "ReadResponseBodyAndSaveToCache",
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 	)
 	defer span.End() // end tracer span
@@ -92,8 +92,7 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	cacheData = append(cacheData, cacheMeta...)
 	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
-	if err := redisCacheClient.Set(ctx, redisKey, cacheData, ttl,
-		TraceOptions{tracer, spanCtx}); err != nil {
+	if err := redisCacheClient.Set(ctx, redisKey, cacheData, ttl); err != nil {
 		log.Error("Failed to save cache to redis: ", err)
 		span.RecordError(err)
 		return

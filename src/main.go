@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"math/rand"
 	"net"
 	"os"
@@ -177,8 +178,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	// set logger middleware
 	if debugMode {
 		log.SetLevel(log.LevelDebug)
+		handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+		slog.SetDefault(slog.New(handler))
 	} else {
 		log.SetLevel(log.LevelInfo)
+		handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+		slog.SetDefault(slog.New(handler))
 	}
 	app.Use(logger.New(logger.Config{
 		Format:     "${time} \"${method} ${path}\" ${status} ${latency} (${bytesSent}) [${reqHeader:X-Request-ID};${reqHeader:Traceparent}] \"${reqHeader:Referer}\" \"${reqHeader:User-Agent}\"\n",
@@ -299,8 +304,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 				// check if the response body of this query has already cached in redis
 				// if yes, return the response from redis
 				redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-				if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
-					TraceOptions{tracer, c.UserContext()}); err == nil {
+				if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
 					log.Debug("Cache hit for cacheKey: ", cacheKey)
 					return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 				}
@@ -357,8 +361,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey,
-				TraceOptions{tracer, c.UserContext()}); err == nil {
+			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
 				log.Debug("Cache hit for cacheKey: ", cacheKey)
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 			}
