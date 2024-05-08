@@ -66,9 +66,9 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	return c.Status(200).Send(cacheBody)
 }
 
-func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64, traceOpts TraceOptions) {
+func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// start tracer span
-	_, span := traceOpts.tracer.Start(traceOpts.ctx, "ReadResponseBodyAndSaveToCache",
+	spanCtx, span := tracer.Start(ctx, "ReadResponseBodyAndSaveToCache",
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 	)
 	defer span.End() // end tracer span
@@ -92,10 +92,10 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	cacheData = append(cacheData, cacheMeta...)
 	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
-	if err := redisCacheClient.Set(ctx, redisKey, cacheData, ttl); err != nil {
+	if err := redisCacheClient.Set(spanCtx, redisKey, cacheData, ttl); err != nil {
+		// This can be consider a warning as it doesn't affect the response
 		log.Error("Failed to save cache to redis: ", err)
-		span.RecordError(err)
-		return
+		return // return to avoid setting the cache key in the response header
 	}
 	resp.Header.Set("X-Hasura-Query-Cache-Key", FormatCacheKey(cacheKey))
 	resp.Header.Set("X-Hasura-Query-Family-Cache-Key", FormatFamilyKey(familyCacheKey))

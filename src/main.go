@@ -132,7 +132,8 @@ func processProxyResponse(c *fiber.Ctx, resp *fasthttp.Response, redisCacheClien
 	resp.Header.Del("Connection")
 	// strip other unneeded headers
 	if ttl != 0 && cacheKey > 0 && resp.StatusCode() == 200 && redisCacheClient != nil {
-		ReadResponseBodyAndSaveToCache(c.Context(), resp, redisCacheClient, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
+		traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
+		ReadResponseBodyAndSaveToCache(traceCtx, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 	}
 }
 
@@ -304,7 +305,8 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 				// check if the response body of this query has already cached in redis
 				// if yes, return the response from redis
 				redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-				if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
+				traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
+				if cacheData, err := redisCacheClient.Get(traceCtx, redisKey); err == nil {
 					log.Debug("Cache hit for cacheKey: ", cacheKey)
 					return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 				}
@@ -361,7 +363,8 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			if cacheData, err := redisCacheClient.Get(c.Context(), redisKey); err == nil {
+			traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
+			if cacheData, err := redisCacheClient.Get(traceCtx, redisKey); err == nil {
 				log.Debug("Cache hit for cacheKey: ", cacheKey)
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 			}

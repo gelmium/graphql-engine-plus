@@ -57,6 +57,21 @@ func InitTracerProvider(ctx context.Context, otelTracerType string) *sdktrace.Tr
 	return tp
 }
 
+func WrapContextCancelByAnotherContext(mainCtx context.Context, triggerCtx context.Context) (ctx context.Context, cancel context.CancelFunc) {
+	// create a new context with cancel
+	newCtx, cancel := context.WithCancel(mainCtx)
+	// create a new goroutine to cancel the context
+	go func() {
+		select {
+		case <-triggerCtx.Done():
+			cancel()
+		case <-newCtx.Done():
+			// pass
+		}
+	}()
+	return newCtx, cancel
+}
+
 // FastHttpHeaderCarrier adapts fasthttp.RequestHeader to satisfy the TextMapCarrier interface.
 type FastHttpHeaderCarrier struct {
 	requestHeader *fasthttp.RequestHeader
