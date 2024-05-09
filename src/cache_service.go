@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
-
-	"log/slog"
 
 	"github.com/mailgun/groupcache/v2"
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -36,8 +36,8 @@ const GroupCacheClusterNodesUrlKey = GroupCacheName + ".groupcache.cluster"
 type GroupcacheOptions struct {
 	// default to 60MiB
 	cacheMaxSize int64
-	// by seting it > 0, the others process will wait up to ETA seconds for first process to populate the cache data
-	// this will avoid the thundering herd problem. value default to 1 seconds.
+	// by seting it > 0, the others process will wait up to ETA (miliseconds) for first process to populate the cache data
+	// this will avoid the thundering herd problem. value default to 1000 ms.
 	waitETA uint64
 	// disable the groupcache auto discovery feature
 	disableAutoDiscovery bool
@@ -46,9 +46,12 @@ type GroupcacheOptions struct {
 
 func NewGroupCacheOptions() (options GroupcacheOptions) {
 	options.cacheMaxSize = 60000000
-	options.waitETA = 1
+	options.waitETA = 1000
 	return
 }
+
+var redisUrlRemoveUnexpectedOptionRegex = regexp.MustCompile(`(?i)(\?)?&?(ssl_cert_reqs=\w+)`)
+var groupcacheNodeUrlRegex *regexp.Regexp
 
 func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl string, redisReaderUrl string, groupcacheUrls string, groupcacheOptions GroupcacheOptions) (*RedisCacheClient, error) {
 	client := &RedisCacheClient{}
@@ -150,7 +153,12 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 						// sleep for 1 seconds
 						time.Sleep(1 * time.Second)
 						// get the urls from REDIS rediscaches.groupcache.cluster set
-						groupcacheNodeUrls, err := client.redisClientReader.SMembers(ctx, GroupCacheClusterNodesUrlKey).Result()
+						pipe := client.redisClientReader.Pipeline()
+						pipe.SAdd(ctx, GroupCacheClusterNodesUrlKey, groupcacheUrl)
+						cmdSMembers := pipe.SMembers(ctx, GroupCacheClusterNodesUrlKey)
+						pipe.Exec(ctx)
+						// groupcacheNodeUrls, err := client.redisClientReader.SMembers(ctx, GroupCacheClusterNodesUrlKey).Result()
+						groupcacheNodeUrls, err := cmdSMembers.Result()
 						if err != nil {
 							// check if err is client closed
 							if err == redis.ErrClosed {
@@ -159,11 +167,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 							}
 							slog.Error("Error when get groupcache cluster nodes from REDIS: ", err)
 						} else {
-							// check if the current groupcacheUrl is in the groupcacheNodeUrls
-							// if not, add it to the groupcacheNodeUrls
-							if !slices.Contains(groupcacheNodeUrls, groupcacheUrl) {
-								groupcacheNodeUrls = append(groupcacheNodeUrls, groupcacheUrl)
-							}
+							// check if groupcache node url list is updated or not
 							if !slices.Equal(currentGroupcacheNodeUrls, groupcacheNodeUrls) {
 								slog.Info("Updating groupcache cluster with new nodes", "length", len(groupcacheNodeUrls))
 								pool.Set(groupcacheNodeUrls...)
@@ -177,6 +181,9 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 
 		client.groupcacheServerUrl = groupcacheUrl
 		serverAddr := strings.SplitN(groupcacheUrl, "://", 2)[1]
+		serverPort := strings.SplitN(serverAddr, ":", 2)[1]
+		// set regex when search for node url in error message
+		groupcacheNodeUrlRegex = regexp.MustCompile(`\d+\.\d+\.\d+\.\d+:` + serverPort)
 		client.groupcacheServer = http.Server{
 			Addr:         serverAddr,
 			ReadTimeout:  5 * time.Second,
@@ -229,9 +236,9 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 				if groupcacheOptions.waitETA > 0 {
 					// if waitETA >0, we will try to do ETA lock to wait for the cache data to be populated
 					setEtaCmd = pipe.SetNX(getterFuncSpanCtx, GroupCacheName+":"+cacheKey+".ETA",
-						time.Now().Add(time.Duration(groupcacheOptions.waitETA)*time.Second).UnixMilli(),
-						time.Duration(groupcacheOptions.waitETA)*time.Second)
-					defaultEta = time.Now().Add(time.Duration(groupcacheOptions.waitETA) * time.Second).UnixMilli()
+						time.Now().Add(time.Duration(groupcacheOptions.waitETA)*time.Millisecond).UnixMilli(),
+						time.Duration(groupcacheOptions.waitETA)*time.Millisecond)
+					defaultEta = time.Now().Add(time.Duration(groupcacheOptions.waitETA) * time.Millisecond).UnixMilli()
 				}
 				pipe.Exec(getterFuncSpanCtx)
 				cacheData, originalErr := getCmd.Bytes()
@@ -355,6 +362,7 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, er
 		spanGroupcache.End()
 		if err != nil {
 			span.SetAttributes(attribute.Bool("cache.hit", false))
+			slog.Debug("Error when groupcache.Get: ", err)
 			return nil, err
 		}
 		span.SetAttributes(attribute.Bool("cache.hit", true))
@@ -415,6 +423,13 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 		slog.Debug("Set cache key", "cacheKey", key, "expire", expire)
 		if err := client.groupcacheClient.Set(spanCtx, key, value, expire, false); err != nil {
 			slog.Error("Error when groupcache.Set: ", err)
+			// detect if err message contain groupcacheNodeUrlRegex
+			failedNodeAddr := groupcacheNodeUrlRegex.FindString(err.Error())
+			if failedNodeAddr != "" {
+				if err := client.redisClient.SRem(spanCtx, GroupCacheClusterNodesUrlKey, "http://"+failedNodeAddr).Err(); err != nil {
+					slog.Error("Error when remove failed groupcache node url from REDIS: ", err)
+				}
+			}
 		}
 		spanGroupcache.End()
 	}

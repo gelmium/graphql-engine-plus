@@ -131,29 +131,34 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 				// TODO: read the JWT token from the request header
 				// extract token from the header by remove "Bearer a"
 				tokenString := string(v[7:])
-				claims, err := jwtAuthParserConfig.ParseJwt(tokenString)
-				// remove timestamp from claims
-				delete(claims, "exp")
-				delete(claims, "nbf")
-				delete(claims, "iat")
-				// remove jwt id from claims
-				delete(claims, "jti")
-				// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
-				// the RegEx should be configurable via environment variable
+				claims, err := jwtAuthParserConfig.ParseWithoutVerifyJwt(tokenString)
 				if err != nil {
 					log.Error("Failed to parse JWT token: ", err)
 				} else {
+					// remove timestamp from claims
+					delete(claims, "exp")
+					delete(claims, "nbf")
+					delete(claims, "iat")
+					// remove jwt id from claims
+					delete(claims, "jti")
+					// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
+					// the RegEx should be configurable via environment variable
+					for claimKey, claimValue := range claims {
+						// convert interface to string using Sprintf
+						header := k + ":jwt.Claims<" + claimKey + ":" + fmt.Sprintf("%v", claimValue) + ">"
+						headers = append(headers, header)
+					}
 					// convert the entire claims to json string
 					// and add it to the hash
 					// this claims has the timestamp removed already.
-					if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
-						log.Error("Failed to marshal claims: ", err)
-					} else {
-						log.Debug("Compute cache keys with claims: ", claims)
-						h.Write(claimsJsonByteString)
-						// continue to skip this header
-						continue
-					}
+					// if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
+					// 	log.Error("Failed to marshal claims: ", err)
+					// } else {
+					// 	log.Debug("Compute cache keys with claims: ", claims)
+					// 	h.Write(claimsJsonByteString)
+					// }
+					// continue to skip this header
+					continue
 				}
 				// other while this header key and value will be added to the hash as below
 			}

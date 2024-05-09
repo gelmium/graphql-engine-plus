@@ -49,7 +49,7 @@ var engineMetaPath = os.Getenv("ENGINE_PLUS_META_PATH")
 // The value must be between 0 and 100. 100 mean all queries will go to primary
 // 0 mean all queries will go to replica. The default value is 50.
 // This value is only used if the HASURA_GRAPHQL_READ_REPLICA_URLS is set
-var engineGqlPvRweight = os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT")
+var engineGqlPvRweight, engineGqlPvRweightParseErr = strconv.ParseUint(os.Getenv("ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT"), 10, 64)
 
 // Set to "http" or "grpc" to enable Open Telemetry tracing
 // "http" will use the HTTP exporter which sent trace to https://localhost:4318/v1/traces.
@@ -77,7 +77,7 @@ var engineGroupcacheClusterMode = os.Getenv("ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE
 // by seting it > 0, the others process will wait up to engineGroupcacheWaitEta seconds for
 // the first process (cache owner) to populate the cache data to redis and then the others process will
 // retrieve the data from the redis cache once it is already populated.
-// this feature will help avoid the thundering herd problem. value default to 1 seconds.
+// this feature will help avoid the thundering herd problem. value default to 1000 (miliseconds).
 // Note: can set to 0 to disable this feature, this give the cache the best performance.
 // Recommended to always leave this on even when engineGroupcacheClusterMode is not set.
 // Only disable it when your setup always have only 1 node running.
@@ -131,3 +131,40 @@ var hasuraGqlRedisClusterUrl = os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
 // Default to 3600 seconds if the env is not set (same as Hasura Cloud)
 // Set this value to 0 will disable query caching
 var hasuraGqlCacheMaxEntryTtl, hasuraGqlCacheMaxEntryTtlParseErr = strconv.ParseUint(os.Getenv("HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL"), 10, 64)
+
+func InitConfig() {
+	// Init default value for API PATH defined in the environment variable
+	if rwPath == "" {
+		rwPath = "/public/graphql/v1"
+	}
+	if roPath == "" {
+		roPath = "/public/graphql/v1readonly"
+	}
+	if healthCheckPath == "" {
+		healthCheckPath = "/public/graphql/health"
+	}
+	if engineMetaPath == "" {
+		engineMetaPath = "/public/meta/"
+	} else if engineMetaPath[len(engineMetaPath)-1:] != "/" {
+		// check if metadataPath end with /
+		// if not, add / to the end of metadataPath.
+		engineMetaPath = engineMetaPath + "/"
+	}
+
+	// Init default value for CORS domain
+	if hasuraGqlCorsDomain == "" {
+		hasuraGqlCorsDomain = "*"
+	}
+	// Init default value for primary vs replica weight routing
+	if engineGqlPvRweightParseErr != nil {
+		engineGqlPvRweight = 50
+	}
+	// Init default value for graphql query caching max TTL
+	if hasuraGqlCacheMaxEntryTtlParseErr != nil {
+		hasuraGqlCacheMaxEntryTtl = 3600
+	}
+	// Init default value for groupcache
+	if engineGroupcacheWaitEtaParseErr != nil {
+		engineGroupcacheWaitEta = 1000
+	}
+}

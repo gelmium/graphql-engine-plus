@@ -41,6 +41,20 @@ func ReadHasuraGraphqlJwtSecretConfig(jwtConfigString string) JwtAuthParser {
 type Result struct {
 }
 
+func (jwtAuthParserConfig JwtAuthParser) ParseWithoutVerifyJwt(tokenString string) (jwt.MapClaims, error) {
+	parser := jwt.NewParser()
+	token, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if ok {
+		return claims, nil
+	} else {
+		return nil, err
+	}
+}
+
 func (jwtAuthParserConfig JwtAuthParser) ParseJwt(tokenString string) (jwt.MapClaims, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		// validate the alg is what we expect:

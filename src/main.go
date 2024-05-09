@@ -3,11 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
-	"math/rand"
 	"net"
 	"os"
-	"regexp"
-	"strconv"
 	"time"
 
 	gfshutdown "github.com/gelmium/graceful-shutdown"
@@ -50,23 +47,8 @@ func waitForStartupToBeCompleted(startupCtx context.Context) {
 	}
 }
 
-var notForwardHeaderRegex = regexp.MustCompile(`(?i)^(Host|Accept-Encoding|Content-Length|Content-Type)$`)
-
 var tracer oteltrace.Tracer
 var propagators propagation.TextMapPropagator
-
-func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
-	for k, v := range c.GetReqHeaders() {
-		// filter out the header that we don't want to forward
-		// such as: Accept-Encoding, Content-Length, Content-Type, Host
-		if notForwardHeaderRegex.MatchString(k) {
-			continue
-		}
-		agent.Set(k, v[0])
-	}
-	// add client IP Address to the end of the X-Forwarded-For header
-	agent.Add("X-Forwarded-For", c.IP())
-}
 
 var primaryEngineServerProxyClient = &fasthttp.HostClient{
 	Addr: "localhost:8881",
@@ -133,24 +115,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		},
 	)
 
-	// The API PATH for handlers are defined using environment variable
-	if rwPath == "" {
-		rwPath = "/public/graphql/v1"
-	}
-	if roPath == "" {
-		roPath = "/public/graphql/v1readonly"
-	}
-	if healthCheckPath == "" {
-		healthCheckPath = "/public/graphql/health"
-	}
-	if engineMetaPath == "" {
-		engineMetaPath = "/public/meta/"
-	} else if engineMetaPath[len(engineMetaPath)-1:] != "/" {
-		// check if metadataPath end with /
-		// if not, add / to the end of metadataPath.
-		engineMetaPath = engineMetaPath + "/"
-	}
-
 	// set logger middleware
 	if debugMode {
 		log.SetLevel(log.LevelDebug)
@@ -175,9 +139,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	}))
 
 	// CORS middleware
-	if hasuraGqlCorsDomain == "" {
-		hasuraGqlCorsDomain = "*"
-	}
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: hasuraGqlCorsDomain,
 	}))
@@ -205,31 +166,25 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	app.Get(healthCheckPath, func(c *fiber.Ctx) error {
 		// check for startupCtx to be done
 		if startupCtx.Err() == nil {
-			log.Warn("Startup has not yet completed, return OK for full health check")
-			// any incoming request at this point of time will be waited until startupCtx is done
-			return c.SendStatus(fiber.StatusOK)
-			// Or we can wait for startupCtx to be done here: <-startupCtx.Done()
+			log.Warn("Startup has not yet completed, return health check not OK")
+			return c.SendStatus(fiber.StatusServiceUnavailable)
 		}
 		// startup has completed, we can now do the health check for dependent services
-		var agent *fiber.Agent
+		var url string
 		if startupReadonlyCtx.Err() == nil {
 			// fire GET request to scripting-server to do healthcheck of
 			// only primary-engine, as replica-engine is not yet ready
-			agent = fiber.Get("http://localhost:8880/health/engine?not=replica")
+			url = "http://localhost:8880/health/engine?not=replica"
 		} else {
 			// fire GET request to scripting-server to do full healthcheck of all engines
-			agent = fiber.Get("http://localhost:8880/health/engine")
+			url = "http://localhost:8880/health/engine"
 		}
-		if err := agent.Parse(); err != nil {
-			log.Error(err)
+		if err := proxy.Do(c, url); err != nil {
+			return err
 		}
-		code, body, errs := agent.Bytes()
-		if len(errs) > 0 {
-			log.Error(errs)
-			return c.Status(500).SendString(errs[0].Error())
-		}
-		// return the response from the upstream url
-		return c.Status(code).Send(body)
+		// Remove Server header from response
+		c.Response().Header.Del(fiber.HeaderServer)
+		return nil
 	})
 	// standard health check endpoint
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -241,16 +196,8 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return c.SendStatus(fiber.StatusOK)
 	})
 
-	primaryVsReplicaWeight := 100
-	if hasuraGqlReadReplicaUrls != "" {
-		primaryVsReplicaWeight = 50
-		// parse the primary weight from env, convert it to int
-		primaryWeightInt, err := strconv.Atoi(engineGqlPvRweight)
-		if err == nil {
-			primaryVsReplicaWeight = primaryWeightInt
-		}
-	}
-
+	mutationHandler := graphqlMutationHandlerFactory()
+	queryHandler := graphqlQueryHandlerFactory(startupReadonlyCtx, redisCacheClient)
 	// add a POST endpoint to forward request to an upstream url
 	app.Post(rwPath, func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
@@ -265,51 +212,14 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
-		// check if this is a query or mutation (can't be mutation)
-		queryType := "query"
+		// check if this is a query or mutation
 		if graphqlReq.IsMutationGraphQLRequest() {
-			queryType = "mutation"
+			// pass to read write handler since this is a graphql muration
+			return mutationHandler(c, graphqlReq)
+		} else {
+			// pass to read only handler if this is a graphql query
+			return queryHandler(c, graphqlReq)
 		}
-		var redisKey string
-		var ttl int
-		var familyCacheKey, cacheKey uint64
-		if queryType == "query" {
-			// check if this is a cached query
-			if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisCacheClient != nil {
-				familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
-				// check if the response body of this query has already cached in redis
-				// if yes, return the response from redis
-				redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-				traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
-				if cacheData, err := redisCacheClient.Get(traceCtx, redisKey); err == nil {
-					log.Debug("Cache hit for cacheKey: ", cacheKey)
-					return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
-				}
-				log.Debug("Cache miss for cacheKey: ", cacheKey)
-			}
-		}
-		req := c.Request()
-		resp := c.Response()
-		// prepare the proxy request
-		prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
-		// start tracer span
-		spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
-			oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
-			oteltrace.WithAttributes(
-				attribute.String("graphql.operation.name", graphqlReq.OperationName),
-				attribute.String("graphql.operation.type", queryType),
-				attribute.String("graphql.document", graphqlReq.Query),
-				attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
-			))
-		carrier := FastHttpHeaderCarrier{&req.Header}
-		propagators.Inject(spanCtx, carrier)
-		if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
-			log.Error("Failed to request primary-engine:", err)
-		}
-		span.End() // end tracer span
-		// process the proxy response
-		processProxyResponse(c, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
-		return err
 	})
 
 	// add a POST endpoint to forward request to an upstream url
@@ -330,66 +240,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// TODO: support subscription via another websocket endpoint in the future
 			return fiber.NewError(fiber.StatusForbidden, "GraphQL Engine Plus does not support subscription yet")
 		}
-		var redisKey string
-		var ttl int
-		var familyCacheKey, cacheKey uint64
-		if ttl = graphqlReq.IsCachedQueryGraphQLRequest(); ttl != 0 && redisCacheClient != nil {
-			familyCacheKey, cacheKey = CalculateCacheKey(c, graphqlReq)
-			// check if the response body of this query has already cached in redis
-			// if yes, return the response from redis
-			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
-			if cacheData, err := redisCacheClient.Get(traceCtx, redisKey); err == nil {
-				log.Debug("Cache hit for cacheKey: ", cacheKey)
-				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
-			}
-			log.Debug("Cache miss for cacheKey: ", cacheKey)
-		}
-		req := c.Request()
-		resp := c.Response()
-		// random an int from 0 to 99
-		// if randomInt is less than primaryWeight, send request to primary upstream
-		// if replica is not available, always send request to primary upstream
-		if startupReadonlyCtx.Err() == nil || primaryVsReplicaWeight >= 100 || (primaryVsReplicaWeight > 0 && rand.Intn(100) < primaryVsReplicaWeight) {
-			// prepare the proxy request to primary upstream
-			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
-			// start tracer span
-			spanCtx, span := tracer.Start(c.UserContext(), "primary-engine",
-				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
-				oteltrace.WithAttributes(
-					attribute.String("graphql.operation.name", graphqlReq.OperationName),
-					attribute.String("graphql.operation.type", "query"),
-					attribute.String("graphql.document", graphqlReq.Query),
-					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
-				))
-			carrier := FastHttpHeaderCarrier{&req.Header}
-			propagators.Inject(spanCtx, carrier)
-			if err = primaryEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
-				log.Error("Failed to request primary-engine:", err)
-			}
-			span.End() // end tracer span
-		} else {
-			// prepare the proxy request to replica upstream
-			prepareProxyRequest(req, "localhost:8882", "/v1/graphql", c.IP())
-			// start tracer span
-			spanCtx, span := tracer.Start(c.UserContext(), "replica-engine",
-				oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
-				oteltrace.WithAttributes(
-					attribute.String("graphql.operation.name", graphqlReq.OperationName),
-					attribute.String("graphql.operation.type", "query"),
-					attribute.String("graphql.document", graphqlReq.Query),
-					attribute.String("http.request.header.x_request_id", c.Get("X-Request-ID")),
-				))
-			carrier := FastHttpHeaderCarrier{&req.Header}
-			propagators.Inject(spanCtx, carrier)
-			if err = replicaEngineServerProxyClient.DoTimeout(req, resp, UPSTREAM_TIME_OUT); err != nil {
-				log.Error("Failed to request replica-engine:", err)
-			}
-			span.End() // end tracer span
-		}
-		// process the proxy response
-		processProxyResponse(c, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
-		return err
+		return queryHandler(c, graphqlReq)
 	})
 
 	// Proxy request to an upstream url
@@ -460,8 +311,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	return app
 }
 
-var redisUrlRemoveUnexpectedOptionRegex = regexp.MustCompile(`(?i)(\?)?&?(ssl_cert_reqs=\w+)`)
-
 func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	// setup redis client
 
@@ -470,9 +319,7 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	}
 	groupcacheOptions := NewGroupCacheOptions()
 	// set groupcacheOptions.waitETA using value from env
-	if engineGroupcacheWaitEtaParseErr == nil {
-		groupcacheOptions.waitETA = engineGroupcacheWaitEta
-	}
+	groupcacheOptions.waitETA = engineGroupcacheWaitEta
 
 	// get list of available addresses
 	localAddress := "127.0.0.1"
@@ -522,6 +369,9 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 }
 
 func main() {
+	// Init config
+	InitConfig()
+	// These context are for startup only
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
