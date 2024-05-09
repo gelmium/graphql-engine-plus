@@ -447,16 +447,25 @@ async def upload_script_handler(request: web.Request):
         result = {"success": [], "message": ""}
         status_code = 200
         for script_file in upload_file_list:
+            if not hasattr(script_file, "file"):
+                logger.error(f"Invalid file field", extra={"file": script_file})
+                continue
             exec_content = script_file.file.read().decode("utf-8")
             try:
                 async with start_as_current_span_async(
                     "validate-script",
                     kind=trace.SpanKind.INTERNAL,
+                    attributes={
+                        "script_file.filename": script_file.filename,
+                    }
                 ):
                     exec_main_func = exec_and_verify_script(exec_content)
                 async with start_as_current_span_async(
                     "save-script",
                     kind=trace.SpanKind.INTERNAL,
+                    attributes={
+                        "script_file.filename": script_file.filename,
+                    }
                 ):
                     # the script is seem to be a valid python script
                     # we can save it to cache and file system

@@ -35,9 +35,10 @@ services:
       - LOG_LEVEL=debug
   graphql-engine:
     image: graphql-engine-plus:latest
-    # Allow to scale up to 3 instances with port range from 8000 to 8002
+    # To allow to scale up to 3 instances
+    # Change ports to "8000-8002:8000"
     ports:
-      - "8000-8002:8000"
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy

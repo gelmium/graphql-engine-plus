@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2/log"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/proxy"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/valyala/fasthttp"
 	"go.opentelemetry.io/otel"
@@ -65,32 +66,6 @@ func setRequestHeaderUpstream(c *fiber.Ctx, agent *fiber.Agent) {
 	}
 	// add client IP Address to the end of the X-Forwarded-For header
 	agent.Add("X-Forwarded-For", c.IP())
-}
-
-func sendRequestToUpstream(c *fiber.Ctx, agent *fiber.Agent) error {
-	// loop through the header and set the header from the original request
-	setRequestHeaderUpstream(c, agent)
-	agent.Body(c.Body())
-	// set the timeout of proxy request
-	agent.Timeout(UPSTREAM_TIME_OUT)
-	// send the request to the upstream url using Fiber Go
-	if err := agent.Parse(); err != nil {
-		log.Error(err)
-		return c.Status(500).SendString("Internal Server Error")
-	}
-	code, body, errs := agent.Bytes()
-	if len(errs) > 0 {
-		// check if error is timeout
-		if errs[0].Error() == "timeout" {
-			return c.Status(504).SendString("Upstream GraphQL Engine Timeout")
-		}
-		// log unhandled error and return 500
-		log.Error(errs)
-		return c.Status(500).SendString("Internal Server Error")
-	}
-	// return the response from the upstream url
-	c.Set("Content-Type", "application/json")
-	return c.Status(code).Send(body)
 }
 
 var primaryEngineServerProxyClient = &fasthttp.HostClient{
@@ -417,29 +392,21 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		return err
 	})
 
-	// add a POST endpoint to forward request to an upstream url
-	app.Post(engineMetaPath+"+", func(c *fiber.Ctx) error {
+	// Proxy request to an upstream url
+	app.All(engineMetaPath+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
-		// fire a POST request to the upstream url using the same header and body from the original request
-		// any path after /public/meta/ will be appended to the upstream url
-		// allow any type of request to be sent to the hasura graphql engine
-		// for ex: /public/meta/v1/metadata -> /v1/metadata
-		// for ex: /public/meta/v2/query -> /v2/query
-		// read more here: https://hasura.io/docs/latest/api-reference/overview/
-		agent := fiber.Post("http://localhost:8881/" + c.Params("+"))
-		// send request to upstream without caching
-		return sendRequestToUpstream(c, agent)
-	})
-	// add a GET endpoint to forward request to an upstream url
-	app.Get(engineMetaPath+"+", func(c *fiber.Ctx) error {
-		// check and wait for startupCtx to be done
-		waitForStartupToBeCompleted(startupCtx)
+		// for ex: POST /public/meta/v1/metadata -> /v1/metadata
+		// for ex: POST /public/meta/v2/query -> /v2/query
 		// for ex: GET /public/meta/v1/version -> /v1/version
-		// fire a GET request to the upstream url using the same header and body from the original request
-		agent := fiber.Get("http://localhost:8881/" + c.Params("+"))
-		// send request to upstream without caching
-		return sendRequestToUpstream(c, agent)
+		// proxy GET request to the upstream using the same header and body from the original request
+		url := "http://localhost:8881/" + c.Params("+")
+		if err := proxy.Do(c, url); err != nil {
+			return err
+		}
+		// Remove Server header from response
+		c.Response().Header.Del(fiber.HeaderServer)
+		return nil
 	})
 
 	// this endpoint is optional and will only be available if the env is set
@@ -447,7 +414,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		// this endpoint expose the scripting-server execute endpoint to public
 		// this allow client to by pass GraphQL engine and execute script directly
 		// be careful when exposing this endpoint to public without a strong security measure
-		app.Post(scriptingPublicPath+"+", func(c *fiber.Ctx) error {
+		app.All(scriptingPublicPath+"+", func(c *fiber.Ctx) error {
 			// validate the engine plus execute secret
 			headerExecuteSecret := c.Get("X-Engine-Plus-Execute-Secret")
 			// if header is empty or not equal to the env, return 401

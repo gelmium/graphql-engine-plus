@@ -17,10 +17,10 @@ golangci-lint:
 	
 up:  ## run the project in local
 	make build.out ARCH=$(shell dpkg --print-architecture)
-	docker-compose up -d
+	docker compose up -d
 	bash scripts/prepare_local_redis.sh
 logs-follow-graphql-engine:
-	docker-compose logs -f graphql-engine
+	docker compose logs -f graphql-engine
 PROJECT := ./example/graphql-engine/schema/v1
 hasura-console-example-v1:  ## run hasura console for schema v1 localy at port 9695 
 	hasura console --project $(PROJECT) --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --api-port 9693 --no-browser --console-hge-endpoint http://localhost:8000/public/meta
@@ -36,7 +36,7 @@ hasura-migrate-create-migration-from-server-example-v1:
 	hasura migrate create "CHANGE-ME" --from-server --database-name default --schema public --project $(PROJECT)
 
 run-migrate-hasura:
-	docker-compose run graphql-engine /root/migrate_hasura.sh
+	docker compose run graphql-engine /root/migrate_hasura.sh
 N := 1000
 run-warmup-apprunner:
 	docker run --rm -it haydenjeune/wrk2:latest -t4 -c$(N) -d100s -R$(shell expr 10 \* $(N) + 100 ) --latency $(WARMUP_HEALTH_ENDPOINT_URL)?sleep=100000
@@ -47,7 +47,7 @@ run-graphql-benchmark-readonly:
 run-redis-insight:
 	docker run --rm --name redisinsight -v redisinsight:/db -p 5001:8001 redislabs/redisinsight:latest
 redis-del-all-data:
-	docker-compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
+	docker compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
 
 build: $(shell find src -type f)  ## compile and build project
 	mkdir -p build && touch build
@@ -85,12 +85,16 @@ upload-script:
 	@set -o allexport; source .env; set +o allexport;curl -X POST http://localhost:8000/scripting/upload -F "file=@$(F)" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
 
 PORT := 8000
-PORT1 := 8001
-PORT2 := 8002
 test.graphql-engine-plus.query:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 0, limit: 1) {id}}"}' http://localhost:$(PORT)/public/graphql/v1
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1readonly
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1
+	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1readonly
+PORT1 := 8001
+PORT2 := 8002
+test.graphql-engine-plus.query-concurrent:
+	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT2)/public/graphql/v1 &
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT1)/public/graphql/v1 &
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1

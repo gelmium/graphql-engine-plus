@@ -1,6 +1,6 @@
 module github.com/gelmium/graphql-engine-plus
 
-go 1.21.0
+go 1.22.3
 
 require (
 	github.com/gelmium/graceful-shutdown v0.0.11
