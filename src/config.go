@@ -27,6 +27,9 @@ var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
 // scripting engine can still be used in hasura metadata by using the local endpoint
 // at http://localhost:8880/execute
 // or at http://localhost:8880/validate
+// For ex, If set engineMetaPath = "/scripting", the following endpoint will be exposed:
+// POST /scripting/upload -> /upload : This endpoint allow upload scripts to the scripting engine
+// POST /scripting/execute -> /execute : This endpoint allow to execute a script using scripting engine
 var scriptingPublicPath = os.Getenv("ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
 
 // The secret key to authenticate the request to the scripting engine
@@ -42,7 +45,7 @@ var allowExecuteUrl, _ = strconv.ParseBool(os.Getenv("ENGINE_PLUS_ALLOW_EXECURL"
 var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
 
 // The API PATH to enable schema migrations, console, etc.
-// default to /public/meta/ if the env is not set
+// default to /public/meta if the env is not set
 var engineMetaPath = os.Getenv("ENGINE_PLUS_META_PATH")
 
 // The weight to route request between primary and replica
@@ -82,6 +85,10 @@ var engineGroupcacheClusterMode = os.Getenv("ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE
 // Recommended to always leave this on even when engineGroupcacheClusterMode is not set.
 // Only disable it when your setup always have only 1 node running.
 var engineGroupcacheWaitEta, engineGroupcacheWaitEtaParseErr = strconv.ParseUint(os.Getenv("ENGINE_PLUS_GROUPCACHE_WAIT_ETA"), 10, 64)
+
+// The maximum memory can be used for internal memory groupcache
+// The value is in bytes, default to 60000000 (60Mib) if not set
+var engineGroupcacheMaxSize, engineGroupcacheMaxSizeParseErr = strconv.ParseUint(os.Getenv("ENGINE_PLUS_GROUPCACHE_MAX_SIZE"), 10, 64)
 
 // Below are the environment variables that are also used by Hasura GraphQL Engine
 
@@ -144,11 +151,17 @@ func InitConfig() {
 		healthCheckPath = "/public/graphql/health"
 	}
 	if engineMetaPath == "" {
-		engineMetaPath = "/public/meta/"
-	} else if engineMetaPath[len(engineMetaPath)-1:] != "/" {
+		engineMetaPath = "/public/meta"
+	} else if engineMetaPath[len(engineMetaPath)-1:] == "/" {
 		// check if metadataPath end with /
-		// if not, add / to the end of metadataPath.
-		engineMetaPath = engineMetaPath + "/"
+		// if yes, remove / from the end of metadataPath.
+		engineMetaPath = engineMetaPath[:len(engineMetaPath)-1]
+	}
+	// all path must not end with "/"
+	if scriptingPublicPath[len(scriptingPublicPath)-1:] == "/" {
+		// check if scriptingPublicPath end with /
+		// if yes, remove / from the end of metadataPath.
+		scriptingPublicPath = scriptingPublicPath[:len(scriptingPublicPath)-1]
 	}
 
 	// Init default value for CORS domain
@@ -163,8 +176,12 @@ func InitConfig() {
 	if hasuraGqlCacheMaxEntryTtlParseErr != nil {
 		hasuraGqlCacheMaxEntryTtl = 3600
 	}
-	// Init default value for groupcache
+	// Init default value for groupcache waitETA
 	if engineGroupcacheWaitEtaParseErr != nil {
 		engineGroupcacheWaitEta = 1000
+	}
+	// Init default value for groupcache cacheMaxSize
+	if engineGroupcacheMaxSizeParseErr != nil {
+		engineGroupcacheMaxSize = 60000000
 	}
 }

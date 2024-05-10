@@ -174,10 +174,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		if startupReadonlyCtx.Err() == nil {
 			// fire GET request to scripting-server to do healthcheck of
 			// only primary-engine, as replica-engine is not yet ready
-			url = "http://localhost:8880/health/engine?not=replica"
+			url = "http://localhost:8880/health/engine?quite=true&not=replica"
 		} else {
 			// fire GET request to scripting-server to do full healthcheck of all engines
-			url = "http://localhost:8880/health/engine"
+			url = "http://localhost:8880/health/engine?quite=true"
 		}
 		if err := proxy.Do(c, url); err != nil {
 			return err
@@ -247,11 +247,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	app.All(engineMetaPath+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
+		// Ex if engineMetaPath = "/public/meta"
 		// for ex: POST /public/meta/v1/metadata -> /v1/metadata
 		// for ex: POST /public/meta/v2/query -> /v2/query
 		// for ex: GET /public/meta/v1/version -> /v1/version
 		// proxy GET request to the upstream using the same header and body from the original request
-		url := "http://localhost:8881/" + c.Params("+")
+		url := "http://localhost:8881" + c.Params("+")
 		if err := proxy.Do(c, url); err != nil {
 			return err
 		}
@@ -277,9 +278,13 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			if !allowExecuteUrl && c.Get("X-Engine-Plus-Execute-Url") != "" {
 				return fiber.NewError(fiber.StatusForbidden, "Forbidden")
 			}
-
 			// check and wait for startupCtx to be done
 			waitForStartupToBeCompleted(startupCtx)
+			// Ex if engineMetaPath = "/scripting"
+			// for ex: POST /scripting/upload -> /upload
+			// for ex: POST /scripting/execute -> /execute
+			// for ex: GET /scripting/validate -> /validate
+			// for ex: GET /scripting/health/engine -> /health/engine
 			req := c.Request()
 			resp := c.Response()
 			// prepare the proxy request
@@ -320,6 +325,7 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	groupcacheOptions := NewGroupCacheOptions()
 	// set groupcacheOptions.waitETA using value from env
 	groupcacheOptions.waitETA = engineGroupcacheWaitEta
+	groupcacheOptions.cacheMaxSize = int64(engineGroupcacheMaxSize)
 
 	// get list of available addresses
 	localAddress := "127.0.0.1"

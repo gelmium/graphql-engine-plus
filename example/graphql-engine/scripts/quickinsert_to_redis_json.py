@@ -20,7 +20,11 @@ async def main(request: web.Request, body):
     try:
         r = request.app["redis_cluster"]
     except KeyError:
-        r = request.app["redis_client"]
+        try:
+            r = request.app["redis_client"]
+        except KeyError:
+            # ignore this request since there is no redis client configured
+            return
     # clone the object json data in payload
     payload_input_object = body["input"]["object"]
     payload_input_object["id"] = str(uuid.uuid4())

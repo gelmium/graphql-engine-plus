@@ -45,8 +45,8 @@ type GroupcacheOptions struct {
 }
 
 func NewGroupCacheOptions() (options GroupcacheOptions) {
-	options.cacheMaxSize = 60000000
-	options.waitETA = 1000
+	options.cacheMaxSize = 60000000 // in bytes
+	options.waitETA = 1000          // in miliseconds
 	return
 }
 
@@ -252,7 +252,6 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 							// ETA is set, return redis.Nil right away to indicate cache miss and continue.
 							// this current process has already acquired the lock to populate the cache data to this cache key
 							// other process will wait for the ETA to expire before try to populate the cache data.
-							slog.Debug("Accquired lock to set cache key", "cacheKey", cacheKey)
 							return &groupcache.ErrNotFound{Msg: "cache key not found in redis (lock acquired)"}
 						} else {
 							// ETA is not set, this mean another process is populating
@@ -302,14 +301,15 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 										if ttl > 0 {
 											expire = time.Now().Add(time.Duration(ttl))
 										}
-										// Set cache data in the groupcache to expire after TTL seconds
-										slog.Debug("Set cache key to dest", "cacheKey", cacheKey, "expire", expire)
 										// must always call this function if return value is nil
 										return dest.SetBytes(cacheData, expire)
 									}
 								}
 							}
-							slog.Debug("Timeout while wait for cache key to be populated", "cacheKey", cacheKey, "eta", eta)
+							if debugMode {
+								// This is not really an error. If timeout is reached, the caller will proceed to retrieve the data from its source.
+								slog.Error("Timeout while wait for cache key to be populated", "cacheKey", cacheKey, "eta", eta)
+							}
 						}
 					}
 					if originalErr == redis.Nil {
@@ -327,8 +327,6 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 				if ttl > 0 {
 					expire = time.Now().Add(time.Duration(ttl))
 				}
-				// Set cache data in the groupcache to expire after TTL seconds
-				slog.Debug("Set cache key to dest (redis cache hit)", "cacheKey", cacheKey, "expire", expire)
 				// must always call this function if return value is nil
 				return dest.SetBytes(cacheData, expire)
 			},
@@ -362,7 +360,10 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, er
 		spanGroupcache.End()
 		if err != nil {
 			span.SetAttributes(attribute.Bool("cache.hit", false))
-			slog.Debug("Error when groupcache.Get: ", err)
+			if debugMode {
+				// only print this log in debug mode
+				slog.Error("Error when groupcache.Get: ", err)
+			}
 			return nil, err
 		}
 		span.SetAttributes(attribute.Bool("cache.hit", true))
@@ -420,7 +421,6 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 		if ttl > 0 {
 			expire = time.Now().Add(time.Duration(ttl) * time.Second)
 		}
-		slog.Debug("Set cache key", "cacheKey", key, "expire", expire)
 		if err := client.groupcacheClient.Set(spanCtx, key, value, expire, false); err != nil {
 			slog.Error("Error when groupcache.Set: ", err)
 			// detect if err message contain groupcacheNodeUrlRegex

@@ -51,7 +51,7 @@ func graphqlQueryHandlerFactory(startupReadonlyCtx context.Context, redisCacheCl
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
 			traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
 			if cacheData, err := redisCacheClient.Get(traceCtx, redisKey); err == nil {
-				log.Debug("Cache hit for cacheKey: ", cacheKey)
+				// log.Debug("Cache hit for cacheKey: ", cacheKey)
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
 			}
 			log.Debug("Cache miss for cacheKey: ", cacheKey)

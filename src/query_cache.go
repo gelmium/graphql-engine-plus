@@ -171,7 +171,7 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 	// to make sure that the hash is always the same
 	// even if the header key and value is not in the same order
 	sort.Strings(headers)
-	log.Debug("Compute cache keys with headers: ", headers)
+	// log.Debug("Compute cache keys with headers: ", headers)
 	for _, header := range headers {
 		h.Write([]byte(header))
 	}

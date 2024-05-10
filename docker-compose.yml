@@ -1,5 +1,4 @@
 # this is an example docker-compose.yml file to run the graphql-engine-plus image
-version: '3.6'
 services:
   postgres:
     image: postgres:13.4-alpine

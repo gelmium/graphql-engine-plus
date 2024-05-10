@@ -2,7 +2,7 @@
 {
   "name": "Gelmium Development Environment in a Docker Container",
   // This is a pre-build image contain all tool required
-  "image": "ghcr.io/gelmium/devcontainer",
+  "image": "gelmium/devcontainer:latest",
   // Add any feature will cause devcontainer image to be rebuilt
   // "features": {
   // },
