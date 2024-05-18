@@ -50,6 +50,8 @@ redis-del-all-data:
 	docker compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
 
 build: $(shell find src -type f)  ## compile and build project
+	# run a test build
+	go build -o ./build/server ./src
 	mkdir -p build && touch build
 
 

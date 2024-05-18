@@ -337,6 +337,14 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 		} else {
 			localAddress = address
 		}
+	} else if engineGroupcacheClusterMode == "aws_ecs" {
+		// get the local ipv4 address of the container instance via the ecs meta-data
+		address, err := GetIpFromAwsEcsContainerMetadata()
+		if err != nil {
+			log.Error(err)
+		} else {
+			localAddress = address
+		}
 	} else if engineGroupcacheClusterMode == "host_ipnet" {
 		address, err := GetIpFromHostNetInterfaces()
 		if err != nil {

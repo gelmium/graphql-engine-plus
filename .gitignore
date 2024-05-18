@@ -4,6 +4,8 @@
 .make.env
 *.out
 *.log
+build
+build/*
 report.html
 report*.json
 test-script*.py
