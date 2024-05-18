@@ -59,6 +59,25 @@ class GqlAsyncClient:
             transport=get_go_http_transport(), execute_timeout=self.timeout
         )
         self.tracer = tracer
+    
+    def setup_client(self, client_type: str):
+        if client_type == "primary":
+            self._client = Client(
+                transport=get_v1_http_transport(), execute_timeout=self.timeout
+            )
+            return self._client
+        elif client_type == "replica":
+            self._client_ro = Client(
+                transport=get_ro_http_transport(), execute_timeout=self.timeout
+            )
+            return self._client_ro
+        elif client_type == "go":
+            self._client_go = Client(
+                transport=get_go_http_transport(), execute_timeout=self.timeout
+            )
+            return self._client_go
+        else:
+            raise ValueError("Invalid client type")
 
     async def validate(self, document: DocumentNode):
         if self._client.schema is None:
@@ -90,11 +109,11 @@ class GqlAsyncClient:
             if is_mutation(gqlQueryString):
                 span.set_attribute("graphql.operation.type", "mutation")
                 client: Client = self._client
-                get_transport_func = get_v1_http_transport
+                client_type = 'primary'
             elif is_cached_query(gqlQueryString):
                 span.set_attribute("graphql.operation.type", "query")
                 client = self._client_go
-                get_transport_func = get_go_http_transport
+                client_type = 'go'
             else:
                 span.set_attribute("graphql.operation.type", "query")
                 weight = primary_weight_vs_replica
@@ -105,10 +124,10 @@ class GqlAsyncClient:
                     weight = 100
                 if weight >= 100 or random.randint(0, 100) < weight:
                     client = self._client
-                    get_transport_func = get_v1_http_transport
+                    client_type = 'primary'
                 else:
                     client = self._client_ro
-                    get_transport_func = get_ro_http_transport
+                    client_type = 'replica'
             span.set_attribute("http.url", client.transport.url)
             for i in range(self.max_retries):
                 try:
@@ -123,9 +142,7 @@ class GqlAsyncClient:
                             **kwargs,
                         )
                 except TransportAlreadyConnected:
-                    client = Client(
-                        transport=get_transport_func(), execute_timeout=self.timeout
-                    )
+                    client = self.setup_client(client_type)
 
     async def subscribe(
         self,

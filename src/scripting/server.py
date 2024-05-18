@@ -675,19 +675,19 @@ async def cleanup_server(app):
     redis_cluster = app.get("redis_cluster")
     if redis_cluster:
         print("Scripting server shutdown: Closing redis-cluster connection")
-        futures.append(redis_cluster.close())
+        futures.append(redis_cluster.aclose())
     redis_cluster_reader = app.get("redis_cluster_reader")
     if redis_cluster_reader:
         print("Scripting server shutdown: Closing redis-cluster-reader connection")
-        futures.append(redis_cluster_reader.close())
+        futures.append(redis_cluster_reader.aclose())
     redis_client = app.get("redis_client")
     if redis_client:
         print("Scripting server shutdown: Closing redis connection")
-        futures.append(redis_client.close())
+        futures.append(redis_client.aclose())
     redis_client_reader = app.get("redis_client_reader")
     if redis_client_reader:
         print("Scripting server shutdown: Closing redis-reader connection")
-        futures.append(redis_client_reader.close())
+        futures.append(redis_client_reader.aclose())
     # close boto3 session
     boto3_context_stack = app.get("boto3_context_stack")
     if boto3_context_stack:

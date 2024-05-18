@@ -375,9 +375,11 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	// ping redis server
 	if err := redisCacheClient.redisClient.Ping(ctx).Err(); err != nil {
 		log.Error("Failed to connect to Redis Server: ", err)
+		return nil
 	}
 	if err := redisCacheClient.redisClientReader.Ping(ctx).Err(); err != nil {
 		log.Error("Failed to connect to Redis Reader Server: ", err)
+		return nil
 	}
 	log.Info("Connected to Redis Cache")
 	return redisCacheClient
