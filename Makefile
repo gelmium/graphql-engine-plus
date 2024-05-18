@@ -63,7 +63,9 @@ build.out: build  ## build project and output build artifact (docker image/lambd
 
 build.push: build.out  ## build project and push build artifact (docker image/lambda zip file) to registry
 	docker tag $(LOCAL_DOCKER_IMG_REPO):latest $(REMOTE_DOCKER_IMG_REPO):$(HASURA_VERSION)
+	docker tag $(LOCAL_DOCKER_IMG_REPO):latest $(REMOTE_DOCKER_IMG_REPO):$(REMOTE_DOCKER_IMG_TAG)
 	docker push $(REMOTE_DOCKER_IMG_REPO):$(HASURA_VERSION)
+	docker push $(REMOTE_DOCKER_IMG_REPO):$(REMOTE_DOCKER_IMG_TAG)
 
 clean:  ## clean up build artifacts
 	rm -rf ./dist ./build

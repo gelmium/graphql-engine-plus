@@ -89,7 +89,8 @@ func processProxyResponse(c *fiber.Ctx, resp *fasthttp.Response, redisCacheClien
 	resp.Header.Del("Connection")
 	// strip other unneeded headers
 	if ttl != 0 && cacheKey > 0 && resp.StatusCode() == 200 && redisCacheClient != nil {
-		traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
+		// start tracer span by wrapping the context with timeout same as fiber Context timeout
+		traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context(), 0)
 		ReadResponseBodyAndSaveToCache(traceCtx, resp, redisCacheClient, ttl, familyCacheKey, cacheKey)
 	}
 }

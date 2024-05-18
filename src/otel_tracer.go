@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/valyala/fasthttp"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -57,9 +58,13 @@ func InitTracerProvider(ctx context.Context, otelTracerType string) *sdktrace.Tr
 	return tp
 }
 
-func WrapContextCancelByAnotherContext(mainCtx context.Context, triggerCtx context.Context) (ctx context.Context, cancel context.CancelFunc) {
+func WrapContextCancelByAnotherContext(mainCtx context.Context, triggerCtx context.Context, timeoutDuration time.Duration) (newCtx context.Context, cancel context.CancelFunc) {
 	// create a new context with cancel
-	newCtx, cancel := context.WithCancel(mainCtx)
+	if timeoutDuration > 0 {
+		newCtx, cancel = context.WithTimeout(mainCtx, timeoutDuration*time.Millisecond)
+	} else {
+		newCtx, cancel = context.WithCancel(mainCtx)
+	}
 	// create a new goroutine to cancel the context
 	go func() {
 		select {
@@ -69,7 +74,8 @@ func WrapContextCancelByAnotherContext(mainCtx context.Context, triggerCtx conte
 			// pass
 		}
 	}()
-	return newCtx, cancel
+	// return ctx, cancel
+	return
 }
 
 // FastHttpHeaderCarrier adapts fasthttp.RequestHeader to satisfy the TextMapCarrier interface.

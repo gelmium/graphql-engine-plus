@@ -80,7 +80,9 @@ var engineGroupcacheClusterMode = os.Getenv("ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE
 // by seting it > 0, the others process will wait up to engineGroupcacheWaitEta seconds for
 // the first process (cache owner) to populate the cache data to redis and then the others process will
 // retrieve the data from the redis cache once it is already populated.
-// this feature will help avoid the thundering herd problem. value default to 1000 (miliseconds).
+// this feature will help avoid the thundering herd problem.
+// value can not be set greater than to 3000 (miliseconds).
+// default to 500 (miliseconds) if the env is not set
 // Note: can set to 0 to disable this feature, this give the cache the best performance.
 // Recommended to always leave this on even when engineGroupcacheClusterMode is not set.
 // Only disable it when your setup always have only 1 node running.
@@ -178,7 +180,13 @@ func InitConfig() {
 	}
 	// Init default value for groupcache waitETA
 	if engineGroupcacheWaitEtaParseErr != nil {
-		engineGroupcacheWaitEta = 1000
+		engineGroupcacheWaitEta = 500
+	} else {
+		// limit the max value to 3000, this allow the group wait to loop for ~500-600 times
+		// each loop will sleep for 5 miliseconds before check the redis cache again
+		if engineGroupcacheWaitEta > 3000 {
+			engineGroupcacheWaitEta = 3000
+		}
 	}
 	// Init default value for groupcache cacheMaxSize
 	if engineGroupcacheMaxSizeParseErr != nil {

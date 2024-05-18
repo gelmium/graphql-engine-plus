@@ -49,7 +49,9 @@ func graphqlQueryHandlerFactory(startupReadonlyCtx context.Context, redisCacheCl
 			// check if the response body of this query has already cached in redis
 			// if yes, return the response from redis
 			redisKey = CreateRedisKey(familyCacheKey, cacheKey)
-			traceCtx, _ := WrapContextCancelByAnotherContext(c.UserContext(), c.Context())
+			// set timeout to underlying context to avoid blocking for too long (3.3s)
+			traceCtx, cancelFunc := WrapContextCancelByAnotherContext(c.UserContext(), c.Context(), 3300)
+			defer cancelFunc()
 			if cacheData, err := redisCacheClient.Get(traceCtx, redisKey); err == nil {
 				// log.Debug("Cache hit for cacheKey: ", cacheKey)
 				return SendCachedResponseBody(c, cacheData, ttl, familyCacheKey, cacheKey, TraceOptions{tracer, c.UserContext()})
