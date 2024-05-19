@@ -33,6 +33,8 @@ from exec_cache import InternalExecCache
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
 exec_cache = InternalExecCache()
+# constants
+BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
 # environment variables
 ENGINE_PLUS_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
 if ENGINE_PLUS_ENABLE_BOTO3:
@@ -172,9 +174,7 @@ async def exec_script(request: web.Request, config) -> web.Response:
                         "read-execfile",
                         kind=trace.SpanKind.INTERNAL,
                     ):
-                        with open(
-                            os.path.join("/graphql-engine/scripts", execfile), "r"
-                        ) as f:
+                        with open(os.path.join(BASE_SCRIPTS_PATH, execfile), "r") as f:
                             exec_content = f.read()
                     # load script with exec and extract the main function
                     exec_main_func = await exec_cache.execute_get_main(
@@ -285,7 +285,9 @@ async def execute_code_handler(request: web.Request):
             elif isinstance(e, (SyntaxError, ValueError)):
                 # response with format understandable by Hasura
                 result = {
-                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    "message": str(e.__class__.__name__)
+                    + ": "
+                    + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
                     "extensions": {
                         "code": str(e.__class__.__name__),
                     },
@@ -294,7 +296,9 @@ async def execute_code_handler(request: web.Request):
                 parent.record_exception(e)
                 # response with format understandable by Hasura
                 result = {
-                    "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    "message": str(e.__class__.__name__)
+                    + ": "
+                    + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
                     "extensions": {
                         "code": str(e.__class__.__name__),
                         "traceback": str(traceback.format_exc()),
@@ -367,7 +371,9 @@ async def validate_json_code_handler(request: web.Request):
                 parent.record_exception(e)
             # response with format understandable by Hasura
             result = {
-                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                "message": str(e.__class__.__name__)
+                + ": "
+                + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
             }
         # finish the span
         if status_code >= 500:
@@ -435,6 +441,7 @@ async def upload_script_handler(request: web.Request):
     ) as parent:
         # read file content from request body
         data = await request.post()
+        upload_path = data.get("path", "")
         upload_file_list = data.getall("file")
         if len(upload_file_list) == 0:
             return web.Response(
@@ -457,7 +464,7 @@ async def upload_script_handler(request: web.Request):
                     kind=trace.SpanKind.INTERNAL,
                     attributes={
                         "script_file.filename": script_file.filename,
-                    }
+                    },
                 ):
                     exec_main_func = exec_and_verify_script(exec_content)
                 async with start_as_current_span_async(
@@ -465,7 +472,7 @@ async def upload_script_handler(request: web.Request):
                     kind=trace.SpanKind.INTERNAL,
                     attributes={
                         "script_file.filename": script_file.filename,
-                    }
+                    },
                 ):
                     # the script is seem to be a valid python script
                     # we can save it to cache and file system
@@ -474,9 +481,16 @@ async def upload_script_handler(request: web.Request):
                     await exec_cache.setdefault(
                         exec_cache_key, exec_main_func, exec_content
                     )
-                    # also write to file
+                    # also write the script to local file system
+                    if len(upload_path):
+                        # we need to create the folder if not exists
+                        os.makedirs(
+                            os.path.join(BASE_SCRIPTS_PATH, upload_path), exist_ok=True
+                        )
                     with open(
-                        os.path.join("/graphql-engine/scripts", script_file.filename),
+                        os.path.join(
+                            BASE_SCRIPTS_PATH, upload_path, script_file.filename
+                        ),
                         "w",
                     ) as f:
                         f.write(exec_content)
@@ -496,9 +510,9 @@ async def upload_script_handler(request: web.Request):
                     status_code = 500
                     result = {
                         "error": str(e.__class__.__name__),
-                        "message": str(
-                            getattr(e, "msg", e.args[0] if len(e.args) else e)
-                        ),
+                        "message": str(e.__class__.__name__)
+                        + ": "
+                        + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
                     }
                     break
         # result

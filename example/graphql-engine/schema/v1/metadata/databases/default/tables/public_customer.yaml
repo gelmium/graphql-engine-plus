@@ -20,7 +20,7 @@ insert_permissions:
             - name: X-Engine-Plus-Execute-Secret
               value: '{{ENGINE_PLUS_EXECUTE_SECRET}}'
             - name: X-Engine-Plus-Execute-File
-              value: quick_validate.py
+              value: validate/quick_validate.py
           timeout: 10
           url: http://localhost:8880/validate
         type: http
