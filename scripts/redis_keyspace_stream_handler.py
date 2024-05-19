@@ -1,8 +1,7 @@
 #!/bin/python3
-from collections import defaultdict
 import sys
 import asyncio
-import re
+import uvloop
 import uuid
 import redis.asyncio as redis
 import asyncpg
@@ -245,5 +244,6 @@ async def main(args):
 
 
 if __name__ == "__main__":
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     # get all command line arguments except the first one and pass to main
     asyncio.run(main(sys.argv[1:]))
