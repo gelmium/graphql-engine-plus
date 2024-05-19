@@ -19,6 +19,8 @@ services:
     image: redis/redis-stack:latest
     volumes:
       - redis-data:/data
+    environment:
+      REDIS_ARGS: "--requirepass redispwd --user redisuser on >redispwd ~* allcommands --user default off nopass nocommands"
     ports:
       - "6379:6379"
       - "18001:8001"
@@ -32,6 +34,7 @@ services:
       - "16686:16686"  # expose Jaeger UI to display traces
     environment:
       - LOG_LEVEL=debug
+    command: --memory.max-traces=1000
   graphql-engine:
     image: graphql-engine-plus:latest
     # To allow to scale up to 3 instances

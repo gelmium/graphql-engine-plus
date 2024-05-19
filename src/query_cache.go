@@ -29,12 +29,25 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 	)
 	defer span.End() // end tracer span
+	// do some validation on the cacheData by checking its length
+	if len(cacheData) <= 8 {
+		err := fmt.Errorf("invalid cache data length")
+		span.RecordError(err)
+		return err
+	}
 	// first 8 bytes of the cacheData is the length of the response body
+
 	// read the length of the response body
 	bodyLength := binary.LittleEndian.Uint64(cacheData[:8])
 	// read the response cacheBody
+	if len(cacheData) < 8+int(bodyLength) {
+		err := fmt.Errorf("mising cache body in cache data")
+		span.RecordError(err)
+		return err
+	}
+	// if the cacheData is longer than the 8+bodyLength, we ignore the extra data
 	cacheBody := cacheData[8 : 8+bodyLength]
-	// read the response cacheMeta
+	// read the cache Json from cacheBody (this include the response cache data and the cache header meta)
 	redisCachedResponseResult := CacheResponseRedis{}
 	if err := JsoniterConfigFastest.Unmarshal(cacheData[8+bodyLength:], &redisCachedResponseResult); err != nil {
 		log.Error("Failed to unmarshal cache meta: ", err)
