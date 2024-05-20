@@ -17,8 +17,6 @@ insert_permissions:
         definition:
           forward_client_headers: true
           headers:
-            - name: X-Engine-Plus-Execute-Secret
-              value: '{{ENGINE_PLUS_EXECUTE_SECRET}}'
             - name: X-Engine-Plus-Execute-File
               value: validate/quick_validate.py
           timeout: 10
@@ -52,3 +50,23 @@ update_permissions:
       filter: {}
       check: null
     comment: ""
+event_triggers:
+  - name: sync_to_dynamo_db_trigger
+    definition:
+      delete:
+        columns: '*'
+      enable_manual: true
+      insert:
+        columns: '*'
+      update:
+        columns: '*'
+    retry_conf:
+      interval_sec: 10
+      num_retries: 0
+      timeout_sec: 60
+    webhook: http://localhost:8880/execute
+    headers:
+      - name: X-Engine-Plus-Execute-File
+        value: sync_to_dynamodb.py
+      - name: X-Engine-Plus-Execute-Secret
+        value: '{{ENGINE_PLUS_EXECUTE_SECRET}}'

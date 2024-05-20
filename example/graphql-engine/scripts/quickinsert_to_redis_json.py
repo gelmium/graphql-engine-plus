@@ -1,6 +1,6 @@
 from aiohttp import web
 
-# do not import here, must import in main() function
+# do not import here unless for type hinting, must import in main() function
 
 
 async def main(request: web.Request, body):

@@ -35,6 +35,14 @@ services:
     environment:
       - LOG_LEVEL=debug
     command: --memory.max-traces=1000
+  dynamodb-local:
+   command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ."
+   image: "amazon/dynamodb-local:latest"
+   ports:
+     - "18000:8000"
+   working_dir: /home/dynamodblocal
+   volumes:
+      - dynamodb-data:/home/dynamodblocal
   graphql-engine:
     image: graphql-engine-plus:latest
     # To allow to scale up to 3 instances
@@ -53,4 +61,6 @@ volumes:
   db_data:
     driver: local
   redis-data:
+    driver: local
+  dynamodb-data:
     driver: local

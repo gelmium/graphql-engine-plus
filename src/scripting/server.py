@@ -39,7 +39,8 @@ BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
 ENGINE_PLUS_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
 if ENGINE_PLUS_ENABLE_BOTO3:
     # this is a global variable to reuse the boto3 session
-    boto3_session = aioboto3.Session()
+    boto3_session = aioboto3.Session(region_name=os.getenv("AWS_REGION"))
+
 ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
 ENGINE_PLUS_EXECUTE_SECRET = os.getenv("ENGINE_PLUS_EXECUTE_SECRET")
 DEBUG_MODE = os.getenv("DEBUG", "").lower() in {"true", "t", "1"}
@@ -614,13 +615,15 @@ async def get_app():
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
     if ENGINE_PLUS_ENABLE_BOTO3:
         init_resources = ENGINE_PLUS_ENABLE_BOTO3.split(",")
-        # TODO: add support for different region
         context_stack = contextlib.AsyncExitStack()
         app["boto3_context_stack"] = context_stack
         app["boto3_session"] = boto3_session
         if "dynamodb" in init_resources:
             app["boto3_dynamodb"] = await context_stack.enter_async_context(
-                boto3_session.resource("dynamodb")
+                boto3_session.resource(
+                    "dynamodb",
+                    endpoint_url=os.getenv("AWS_BOTO3_DYNAMODB_ENDPOINT_URL"),
+                )
             )
         if "s3" in init_resources:
             app["boto3_s3"] = await context_stack.enter_async_context(
