@@ -476,7 +476,12 @@ async def upload_script_handler(request: web.Request):
                 ):
                     # the script is seem to be a valid python script
                     # we can save it to cache and file system
-                    exec_cache_key = f"exec:{script_file.filename}"
+                    if len(upload_path):
+                        exec_cache_key = (
+                            f"exec:{os.path.join(upload_path,script_file.filename)}"
+                        )
+                    else:
+                        exec_cache_key = f"exec:{script_file.filename}"
                     exec_cache.pop(exec_cache_key, None)
                     await exec_cache.setdefault(
                         exec_cache_key, exec_main_func, exec_content

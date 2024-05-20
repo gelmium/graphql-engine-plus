@@ -36,13 +36,15 @@ func InitTracerProvider(ctx context.Context, otelTracerType string) *sdktrace.Tr
 			log.Println("Error, unknown Open Telemetry exporter: ", otelTracerType)
 		}
 		tp := sdktrace.NewTracerProvider()
-		tp.Shutdown(ctx)
+		// calling Shutdown create a noops tracer provider
+		_ = tp.Shutdown(ctx)
 		return tp
 	}
 	if err != nil {
 		log.Println("Error when init Open Telemetry tracer: ", err)
 		tp := sdktrace.NewTracerProvider()
-		tp.Shutdown(ctx)
+		// calling Shutdown create a noops tracer provider
+		_ = tp.Shutdown(ctx)
 		return tp
 	}
 	tp := sdktrace.NewTracerProvider(

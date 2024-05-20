@@ -2,6 +2,7 @@
 .vscode
 .env
 .make.env
+.hasura-cli.env
 *.out
 *.log
 build

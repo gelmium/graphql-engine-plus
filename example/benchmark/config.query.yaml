@@ -1,7 +1,4 @@
-# url: 'http://localhost:8000/public/graphql/v1'
-# url: 'http://localhost:8000/public/graphql/readonly/v1'
-# url: 'http://localhost:8881/v1/graphql'
-url: 'https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
+url: 'http://localhost:8000/public/graphql/v1'
 # url: 'http://localhost:3000/proxy?url=https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/graphql/v1'
 headers:
   X-Hasura-Admin-Secret: gelsemium
@@ -35,11 +32,11 @@ queries:
     # We run this first to allow Aurora Serverless have time to scale
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 1000000
-    connections: 1000
+    requests: 50000
+    connections: 100
     query: |
       query MyQuery {
-        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+        customer(limit: 10, where: {created_at: {_gt: "2023-08-01", _lt: "2028-09-11"}}) {
           id
           last_name
           first_name
@@ -51,8 +48,8 @@ queries:
     # rps: 800
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
-    connections: 1000
+    requests: 10000
+    connections: 100
     tools: [k6]
     query: |
       mutation CustomerMutation {
@@ -72,8 +69,8 @@ queries:
     # rps: 600
     # duration: 60s
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 200000
-    connections: 1000
+    requests: 10000
+    connections: 100
     query: |
       mutation InsertMutation {
         quickinsert_customer_one(object: {first_name: "test2", external_ref_list: ["text_external_ref2"], last_name: "cus"}) {
@@ -86,25 +83,10 @@ queries:
           updated_at
         }
       }
-  - name: List-Customer-2
-    # this List-Customer query is happening in parallel with the async create customer
-    # from Redis message stream worker trigged by QuickInsert-Customer
-    tools: [k6]
-    execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 500000
-    connections: 1000
-    query: |
-      query MyQuery {
-        customer(limit: 2, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-          id
-          last_name
-          first_name
-        }
-      }
   - name: Create-Customer-Failed-Validation
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 500000
-    connections: 1000
+    requests: 50000
+    connections: 100
     tools: [k6]
     query: |
       mutation CustomerMutation {
@@ -115,11 +97,11 @@ queries:
   - name: List-Customer-2-Cached
     tools: [k6]
     execution_strategy: FIXED_REQUEST_NUMBER
-    requests: 500000
-    connections: 1000
+    requests: 50000
+    connections: 100
     query: |
-      query MyQuery @cached {
-        customer(limit: 2, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
+      query MyQuery @cached(ttl: 60) {
+        customer(limit: 20, where: {created_at: {_gt: "2023-08-01", _lt: "2028-09-11"}}) {
           id
           last_name
           first_name

@@ -72,7 +72,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 			// init the redis client for read cache
 			client.redisClientReader = redis.NewClusterClient(readOnlyClusterOpt)
 		} else {
-			slog.Error("Failed to parse Redis Cluster URL: ", err)
+			slog.Error("Failed to parse Redis Cluster URL", "error", err.Error())
 			return nil, err
 		}
 	} else {
@@ -80,7 +80,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 		if opt, err := redis.ParseURL(redisUrl); err == nil {
 			client.redisClient = redis.NewClient(opt)
 		} else {
-			slog.Error("Failed to parse Redis URL: ", err)
+			slog.Error("Failed to parse Redis URL", "error", err.Error())
 			return nil, err
 		}
 		// init the redis client for read cache
@@ -91,16 +91,16 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 		if opt, err := redis.ParseURL(redisReaderUrl); err == nil {
 			client.redisClientReader = redis.NewClient(opt)
 		} else {
-			slog.Error("Failed to parse Redis Reader URL: ", err)
+			slog.Error("Failed to parse Redis Reader URL", "error", err.Error())
 			return nil, err
 		}
 	}
 	// Setup OTEL tracing
 	if err := redisotel.InstrumentTracing(client.redisClient); err != nil {
-		slog.Error("Failed to instrument tracing Redis Client: ", err)
+		slog.Error("Failed to instrument tracing Redis Client", "error", err.Error())
 	}
 	if err := redisotel.InstrumentTracing(client.redisClientReader); err != nil {
-		slog.Error("Failed to instrument tracing Redis Client Reader: ", err)
+		slog.Error("Failed to instrument tracing Redis Client Reader", "error", err.Error())
 	}
 	client.tracer = otel.Tracer("cache-service")
 	// TODO: Setup OTEL metrics
@@ -130,7 +130,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 			// get the urls from REDIS rediscaches.groupcache.cluster set
 			groupcacheNodeUrls, err := client.redisClient.SMembers(ctx, GroupCacheClusterNodesUrlKey).Result()
 			if err != nil {
-				slog.Error("Error when get groupcache cluster nodes from REDIS: ", err)
+				slog.Error("Error when get groupcache cluster nodes from REDIS", "error", err.Error())
 				// use the input groupcacheUrlsSlice instead of cluster nodes from REDIS
 				pool.Set(groupcacheUrlsSlice...)
 			} else {
@@ -156,7 +156,11 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 						pipe := client.redisClientReader.Pipeline()
 						pipe.SAdd(ctx, GroupCacheClusterNodesUrlKey, groupcacheUrl)
 						cmdSMembers := pipe.SMembers(ctx, GroupCacheClusterNodesUrlKey)
-						pipe.Exec(ctx)
+						_, err := pipe.Exec(ctx)
+						if err != nil {
+							slog.Error("Error when execute pipeline cmds REDIS", "error", err.Error())
+							continue
+						}
 						// groupcacheNodeUrls, err := client.redisClientReader.SMembers(ctx, GroupCacheClusterNodesUrlKey).Result()
 						groupcacheNodeUrls, err := cmdSMembers.Result()
 						if err != nil {
@@ -165,7 +169,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 								// if client is already closed, exit the loop
 								return
 							}
-							slog.Error("Error when get groupcache cluster nodes from REDIS: ", err)
+							slog.Error("Error when get groupcache cluster nodes from REDIS", "error", err.Error())
 						} else {
 							// check if groupcache node url list is updated or not
 							if !slices.Equal(currentGroupcacheNodeUrls, groupcacheNodeUrls) {
@@ -240,7 +244,10 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 						time.Duration(groupcacheOptions.waitETA)*time.Millisecond)
 					defaultEta = time.Now().Add(time.Duration(groupcacheOptions.waitETA) * time.Millisecond).UnixMilli()
 				}
-				pipe.Exec(getterFuncSpanCtx)
+				_, execErr := pipe.Exec(getterFuncSpanCtx)
+				if execErr != nil {
+					slog.Error("Error when execute pipeline cmds REDIS", "error", execErr.Error())
+				}
 				cacheData, originalErr := getCmd.Bytes()
 				// originalErr can be redis.Nil or other error (redis server issue or network error)
 				if originalErr != nil {
@@ -260,7 +267,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 							eta, err := client.redisClientReader.Get(getterFuncSpanCtx, GroupCacheName+":"+cacheKey+".ETA").Int64()
 							if err != nil {
 								// there is an error when get ETA, set ETA to the defaultETA
-								slog.Error("Error when get the cache key wait ETA from REDIS: ", err)
+								slog.Error("Error when get the cache key wait ETA from REDIS", "error", err.Error())
 								eta = defaultEta
 							}
 							// Wait loop check til ETA
@@ -275,7 +282,10 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 								pipe := client.redisClientReader.Pipeline()
 								checkCmd := pipe.Get(waitSpanCtx, cacheKey)
 								getTTLCmd := pipe.TTL(waitSpanCtx, cacheKey)
-								pipe.Exec(waitSpanCtx)
+								_, execErr := pipe.Exec(waitSpanCtx)
+								if execErr != nil {
+									slog.Error("Error when execute pipeline cmds REDIS", "error", execErr.Error())
+								}
 								cacheData, err := checkCmd.Bytes()
 								if err == redis.Nil {
 									// cache data is not populated yet, wait for 5 millisecond
@@ -287,7 +297,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 									continue
 								} else if err != nil {
 									// break out of loop to return original err
-									slog.Error("Error when wait for cache to be populated: ", err)
+									slog.Error("Error when wait for cache to be populated", "error", err.Error())
 									break
 								} else {
 									// cache data is populated, set the cache data to groupcache
@@ -362,7 +372,7 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, er
 			span.SetAttributes(attribute.Bool("cache.hit", false))
 			if debugMode {
 				// only print this log in debug mode
-				slog.Error("Error when groupcache.Get: ", err)
+				slog.Error("Error when groupcache.Get", "error", err.Error())
 			}
 			return nil, err
 		}
@@ -422,12 +432,12 @@ func (client *RedisCacheClient) Set(ctx context.Context, key string, value []byt
 			expire = time.Now().Add(time.Duration(ttl) * time.Second)
 		}
 		if err := client.groupcacheClient.Set(spanCtx, key, value, expire, false); err != nil {
-			slog.Error("Error when groupcache.Set: ", err)
+			slog.Error("Error when groupcache.Set", "error", err.Error())
 			// detect if err message contain groupcacheNodeUrlRegex
 			failedNodeAddr := groupcacheNodeUrlRegex.FindString(err.Error())
 			if failedNodeAddr != "" {
 				if err := client.redisClient.SRem(spanCtx, GroupCacheClusterNodesUrlKey, "http://"+failedNodeAddr).Err(); err != nil {
-					slog.Error("Error when remove failed groupcache node url from REDIS: ", err)
+					slog.Error("Error when remove failed groupcache node url from REDIS", "error", err.Error())
 				}
 			}
 		}
@@ -440,7 +450,7 @@ func (client *RedisCacheClient) Close(shutdownCtx context.Context, withGroupcach
 	// close redis client
 	if client.groupcacheServerUrl != "" {
 		if err := client.redisClient.SRem(shutdownCtx, GroupCacheClusterNodesUrlKey, client.groupcacheServerUrl).Err(); err != nil {
-			slog.Error("Error when remove groupcache server url from REDIS: ", err)
+			slog.Error("Error when remove groupcache server url from REDIS", "error", err.Error())
 		}
 	}
 	err1 := client.redisClient.Close()
@@ -450,7 +460,7 @@ func (client *RedisCacheClient) Close(shutdownCtx context.Context, withGroupcach
 		// and will not print the below error message
 		err := client.groupcacheServer.Shutdown(shutdownCtx)
 		if err != nil {
-			slog.Error("Error when groupcache httpServer.Shutdown(): ", err)
+			slog.Error("Error when groupcache httpServer.Shutdown()", "error", err.Error())
 		}
 	}
 	// we dont need to close groupcache client as it is not a connection pool

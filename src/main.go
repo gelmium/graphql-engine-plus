@@ -405,8 +405,18 @@ func main() {
 	if engineServerPort == "" {
 		engineServerPort = "8000"
 	}
-	// start the http server
-	go app.Listen(engineServerHost + ":" + engineServerPort)
+
+	// start the http server in coroutine and handler error
+	// if the server failed to start
+	// we dont need to wait for the server to start
+	// as we will wait for the startup to be completed
+	go func() {
+		err := app.Listen(engineServerHost + ":" + engineServerPort)
+		if err != nil {
+			// trigger graceful shutdown
+			mainCtxCancelFn()
+		}
+	}()
 	// start the engine servers
 	serverShutdownErrorChanel := make(chan error)
 	startServerCtx, startServerCtxCancelFn := context.WithCancel(mainCtx)

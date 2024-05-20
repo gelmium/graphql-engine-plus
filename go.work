@@ -1,7 +1,6 @@
 go 1.22.3
 
 use (
-	./example/backend/runner
 	./example/benchmark/proxy
 	./src
 )

@@ -31,15 +31,15 @@ async def main(request: web.Request, body):
         if c.first_name == c.last_name:
             raise ValueError("first_name is the same as last_name")
     # you can do more validation using graphql_client or redis_client
-    from gql import gql, Client
-    graphql_client: Client = request.app["graphql_client"]
-    query = gql(
-        """query MyQuery {
-        customer(limit: 1, where: {created_at: {_gt: "2023-08-01", _lt: "2023-09-11"}}) {
-          id
-          last_name
-          first_name
-        }
-      }"""
-    )
-    query_result = await graphql_client.execute(query)
+    # from gql import gql, Client
+    # graphql_client: Client = request.app["graphql_client"]
+    # query = gql(
+    #     """query MyQuery {
+    #     customer(limit: 1, where: {created_at: {_gt: "2023-08-01", _lt: "2028-09-11"}}) {
+    #       id
+    #       last_name
+    #       first_name
+    #     }
+    #   }"""
+    # )
+    # query_result = await graphql_client.execute(query)

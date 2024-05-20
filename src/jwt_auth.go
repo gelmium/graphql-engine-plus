@@ -34,7 +34,10 @@ type JwtAuthParser struct {
 
 func ReadHasuraGraphqlJwtSecretConfig(jwtConfigString string) JwtAuthParser {
 	jwtAuthParserConfig := JwtAuthParser{}
-	json.Unmarshal([]byte(jwtConfigString), &jwtAuthParserConfig)
+	err := json.Unmarshal([]byte(jwtConfigString), &jwtAuthParserConfig)
+	if err != nil {
+		fmt.Println("Failed to parse Hasura Graphql JWT Secret config: ", err)
+	}
 	return jwtAuthParserConfig
 }
 

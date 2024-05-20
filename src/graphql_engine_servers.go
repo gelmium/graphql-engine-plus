@@ -76,7 +76,9 @@ func StartGraphqlEngineServers(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		cmd0.Wait()
+		if err := cmd0.Wait(); err != nil {
+			log.Error("scripting-server exited with error:", err)
+		}
 	}()
 	cmds = append(cmds, cmd0)
 	log.Info("Starting graphql-engine primary at port 8881")
@@ -97,7 +99,9 @@ func StartGraphqlEngineServers(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		cmd1.Wait()
+		if err := cmd1.Wait(); err != nil {
+			log.Error("primary-engine exited with error:", err)
+		}
 	}()
 	cmds = append(cmds, cmd1)
 
@@ -146,7 +150,9 @@ func StartGraphqlEngineServers(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cmd2.Wait()
+			if err := cmd2.Wait(); err != nil {
+				log.Error("replica-engine exited with error:", err)
+			}
 		}()
 		cmds = append(cmds, cmd2)
 		// loop for the readonly replica-engine to start, we dont need to wait for it
