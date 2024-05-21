@@ -69,4 +69,4 @@ event_triggers:
       - name: X-Engine-Plus-Execute-File
         value: sync_to_dynamodb.py
       - name: X-Engine-Plus-Execute-Secret
-        value: '{{ENGINE_PLUS_EXECUTE_SECRET}}'
+        value_from_env: ENGINE_PLUS_EXECUTE_SECRET

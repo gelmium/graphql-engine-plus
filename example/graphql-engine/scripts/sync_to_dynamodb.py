@@ -2,7 +2,10 @@ from aiohttp import web
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
+    from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource, Table
+    from boto3.dynamodb.table import BatchWriter
+    from redis import Redis
+    from msgspec.json import Encoder, Decoder
 
 # do not import here unless for type hinting, must import in main() function
 
@@ -11,25 +14,28 @@ async def main(request: web.Request, body):
     import logging, time
     from datetime import datetime
     from opentelemetry import trace
-
-    tracer = trace.get_tracer("sync_to_dynamodb.py")
-    logger = logging.getLogger("sync_to_dynamodb.py")
-    with tracer.start_as_current_span("sync_to_dynamodb.py") as span:
-        payload = body
+    payload = body
+    SCRIPT_NAME = "sync_to_dynamodb.py"
+    tracer = trace.get_tracer(SCRIPT_NAME)
+    logger = logging.getLogger(SCRIPT_NAME)
+    with tracer.start_as_current_span(SCRIPT_NAME, attributes={
+        "trigger_id": payload.get("id"),
+        "trigger_name": payload.get("trigger",{}).get("name"),
+    }) as span:
         BATCH_SIZE = int(request.query.get("BATCH_SIZE", 5))
-
+        IS_CRON_JOB = request.query.get("IS_CRON_JOB")
         # require redis client to be initialized, HASURA_GRAPHQL_REDIS_URL
         # or HASURA_GRAPHQL_REDIS_CLUSTER_URL must be set in environment
         try:
-            r = request.app["redis_cluster"]
+            r: Redis = request.app["redis_cluster"]
         except KeyError:
-            r = request.app["redis_client"]
+            r: Redis = request.app["redis_client"]
 
         # require boto3 session to be initialized, by set environment
         # ENGINE_PLUS_ENABLE_BOTO3 to include 'dynamodb'
         boto3_dynamodb: DynamoDBServiceResource = request.app["boto3_dynamodb"]
-        json_encoder = request.app["json_encoder"]
-        json_decoder = request.app["json_decoder"]
+        json_encoder: Encoder = request.app["json_encoder"]
+        json_decoder: Decoder = request.app["json_decoder"]
 
         def convert_timestamp_fields_of_object_to_epoch(object_data):
             # scan the object_data for timestamp string fields and convert them to epoch
@@ -55,8 +61,8 @@ async def main(request: web.Request, body):
                         )
 
         action = payload["event"]["op"]
-        session_variables = payload["event"]["session_variables"]
-        trace_context = payload["event"]["trace_context"]
+        session_variables = payload["event"].get("session_variables")
+        trace_context = payload["event"].get("trace_context")
         if (
             request.query.get("ONLY_SYNC_CHANGES_FROM_GRAPHQL_MUTATION")
             and session_variables == trace_context == None
@@ -74,31 +80,40 @@ async def main(request: web.Request, body):
         provisioning_waiter = None
         response = await boto3_dynamodb.meta.client.list_tables()
         if table_name in response["TableNames"]:
-            logger.info(f"Table `{table_name}` already exists")
+            logger.debug(f"Table `{table_name}` already exists")
         else:
             # create a new dynamodb table
             logger.info(f"Creating table `{table_name}`")
-            await boto3_dynamodb.create_table(
-                TableName=table_name,
-                KeySchema=[
-                    {"AttributeName": "id", "KeyType": "HASH"},
-                    {"AttributeName": "created_at", "KeyType": "RANGE"},
-                ],
-                AttributeDefinitions=[
-                    {"AttributeName": "id", "AttributeType": "S"},
-                    {"AttributeName": "created_at", "AttributeType": "N"},
-                ],
-                # on-demand capacity mode
-                BillingMode="PAY_PER_REQUEST",
-            )
+            try:
+                await boto3_dynamodb.create_table(
+                    TableName=table_name,
+                    KeySchema=[
+                        {"AttributeName": "id", "KeyType": "HASH"},
+                        {"AttributeName": "created_at", "KeyType": "RANGE"},
+                    ],
+                    AttributeDefinitions=[
+                        {"AttributeName": "id", "AttributeType": "S"},
+                        {"AttributeName": "created_at", "AttributeType": "N"},
+                    ],
+                    # on-demand capacity mode
+                    BillingMode="PAY_PER_REQUEST",
+                )
+            except boto3_dynamodb.meta.client.exceptions.ResourceInUseException:
+                logger.info(f"Table `{table_name}` already exists while attempting to create")
+            except Exception as e:
+                logger.error(f"Failed to create table `{table_name}`: {e}")
+                return {"status": "failed", "reason": f"Failed to create table `{table_name}`"}
             # create a waiter to wait for the table to be provisioned if required to do so.
             provisioning_waiter = boto3_dynamodb.meta.client.get_waiter("table_exists")
 
         if action == "INSERT" or action == "UPDATE" or action == "MANUAL":
-            object_data = payload["event"]["data"]["new"]
-            convert_timestamp_fields_of_object_to_epoch(object_data)
-            # push it to start of the queue
-            queue_len = await r.lpush(sync_queue_name, json_encoder.encode(object_data))
+            if IS_CRON_JOB:
+                queue_len = await r.llen(sync_queue_name)
+            else:
+                object_data = payload["event"]["data"]["new"]
+                convert_timestamp_fields_of_object_to_epoch(object_data)
+                # push it to start of the queue
+                queue_len = await r.lpush(sync_queue_name, json_encoder.encode(object_data))
             # check if the queue is full and process it
             if queue_len >= BATCH_SIZE:
                 # pop a batch from the queue
@@ -110,8 +125,9 @@ async def main(request: web.Request, body):
                         if provisioning_waiter:
                             await provisioning_waiter.wait(TableName=table_name)
                         # TODO: handle failure of batch write, send to dead letter queue
-                        table = await boto3_dynamodb.Table(table_name)
-                        async with table.batch_writer() as dynamo_writer:
+                        table: Table = await boto3_dynamodb.Table(table_name)
+                        async with table.batch_writer() as batch_writer:
+                            batch_writer: BatchWriter
                             for object_data_json_str in list(set(objects_batch)):
                                 object_data = json_decoder.decode(object_data_json_str)
                                 logger.info(
@@ -119,7 +135,7 @@ async def main(request: web.Request, body):
                                 )
                                 # set TTL to 7 days (dynamodb uses epoch in seconds)
                                 object_data["ttl"] = int(time.time()) + 7 * 24 * 60 * 60
-                                await dynamo_writer.put_item(Item=object_data)
+                                await batch_writer.put_item(Item=object_data)
                                 count += 1
                         return {"status": "updated", "count": count}
                 # else (no objects in the queue)
@@ -127,17 +143,20 @@ async def main(request: web.Request, body):
             # else:
             return {"status": "pending", "in_queue": queue_len}
         elif action == "DELETE":
-            object_data = payload["event"]["data"]["old"]
-            convert_timestamp_fields_of_object_to_epoch(object_data)
-            # delete the object from the table
-            object_key = {
-                "id": object_data["id"],
-                "created_at": object_data["created_at"],
-            }
-            # push it to start of the queue
-            queue_len = await r.lpush(
-                delete_queue_name, json_encoder.encode(object_key)
-            )
+            if IS_CRON_JOB:
+                queue_len = await r.llen(sync_queue_name)
+            else:
+                object_data = payload["event"]["data"]["old"]
+                convert_timestamp_fields_of_object_to_epoch(object_data)
+                # delete the object from the table
+                object_key = {
+                    "id": object_data["id"],
+                    "created_at": object_data["created_at"],
+                }
+                # push it to start of the queue
+                queue_len = await r.lpush(
+                    delete_queue_name, json_encoder.encode(object_key)
+                )
             # check if the queue is full and process it
             if queue_len >= BATCH_SIZE:
                 count = 0
@@ -148,15 +167,15 @@ async def main(request: web.Request, body):
                     with tracer.start_as_current_span("dynamodb.batch_delete_item"):
                         if provisioning_waiter:
                             await provisioning_waiter.wait(TableName=table_name)
-                        table = await boto3_dynamodb.Table(table_name)
-                        async with table.batch_writer() as dynamo_writer:
+                        table: Table = await boto3_dynamodb.Table(table_name)
+                        async with table.batch_writer() as batch_writer:
                             # deduplicate, dynamodb doesnt allow batch delete_item with duplicate keys
                             for object_key_json_sr in list(set(objects_batch)):
                                 object_key = json_decoder.decode(object_key_json_sr)
                                 logger.info(
                                     f"Batch delete object.id={object_key['id']} from table `{table_name}`"
                                 )
-                                await dynamo_writer.delete_item(Key=object_key)
+                                await batch_writer.delete_item(Key=object_key)
                                 count += 1
                 return {"status": "deleted", "count": count}
             # else:

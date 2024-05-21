@@ -1,4 +1,8 @@
 from aiohttp import web
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gql import Client
 
 # do not import here unless for type hinting, must import in main() function
 
@@ -31,7 +35,7 @@ async def main(request: web.Request, body):
         if c.first_name == c.last_name:
             raise ValueError("first_name is the same as last_name")
     # you can do more validation using graphql_client or redis_client
-    # from gql import gql, Client
+    # from gql import gql
     # graphql_client: Client = request.app["graphql_client"]
     # query = gql(
     #     """query MyQuery {

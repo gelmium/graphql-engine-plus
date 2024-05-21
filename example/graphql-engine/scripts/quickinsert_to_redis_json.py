@@ -1,11 +1,15 @@
 from aiohttp import web
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from redis import Redis
+    from msgspec.json import Encoder, Decoder
 # do not import here unless for type hinting, must import in main() function
 
 
 async def main(request: web.Request, body):
     from datetime import datetime, timezone
-    import uuid, logging, msgspec
+    import uuid, logging
 
     logger = logging.getLogger("quickinsert_to_redis_json.py")
     # required params from query string
@@ -18,13 +22,14 @@ async def main(request: web.Request, body):
 
     # require redis client to be initialized in the server.py
     try:
-        r = request.app["redis_cluster"]
+        r: Redis = request.app["redis_cluster"]
     except KeyError:
         try:
-            r = request.app["redis_client"]
+            r: Redis = request.app["redis_client"]
         except KeyError:
             # ignore this request since there is no redis client configured
             return
+    json_encoder: Encoder = request.app["json_encoder"]
     # clone the object json data in payload
     payload_input_object = body["input"]["object"]
     payload_input_object["id"] = str(uuid.uuid4())
@@ -38,7 +43,7 @@ async def main(request: web.Request, body):
     await r.xadd(
         stream_key,
         {
-            "payload": msgspec.json.encode(payload_input_object),
+            "payload": json_encoder.encode(payload_input_object),
         },
         maxlen=STREAM_MAX_LEN,
     )
