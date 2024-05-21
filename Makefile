@@ -43,6 +43,8 @@ run-graphql-benchmark-readonly:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.readonly-query.yaml" --outfile="tmp/report-readonly.json"	
 redis-del-all-data:
 	docker compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
+dynamodb-show-all-item:
+	aws dynamodb --endpoint-url http://localhost:18000 execute-statement --statement 'SELECT * FROM "public.customer"'
 
 build: $(shell find src -type f)  ## compile and build project
 	# run a test build

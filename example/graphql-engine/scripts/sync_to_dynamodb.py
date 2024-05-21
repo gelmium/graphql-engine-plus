@@ -16,7 +16,7 @@ async def main(request: web.Request, body):
     logger = logging.getLogger("sync_to_dynamodb.py")
     with tracer.start_as_current_span("sync_to_dynamodb.py") as span:
         payload = body
-        BATCH_SIZE = request.query.get("BATCH_SIZE", 10)
+        BATCH_SIZE = request.query.get("BATCH_SIZE", 5)
 
         # require redis client to be initialized, HASURA_GRAPHQL_REDIS_URL
         # or HASURA_GRAPHQL_REDIS_CLUSTER_URL must be set in environment
@@ -118,7 +118,11 @@ async def main(request: web.Request, body):
                                 # set TTL to 7 days (dynamodb uses epoch in seconds)
                                 object_data["ttl"] = int(time.time()) + 7 * 24 * 60 * 60
                                 await dynamo_writer.put_item(Item=object_data)
-            return object_data
+                        return {"status": "updated", "count": count}
+                # else (no objects in the queue)
+                return {"status": "skipped", "message": "No objects in the queue"}
+            # else:
+            return {"status": "pending", "in_queue": queue_len}
         elif action == "DELETE":
             object_data = payload["event"]["data"]["old"]
             convert_timestamp_fields_of_object_to_epoch(object_data)
@@ -152,6 +156,6 @@ async def main(request: web.Request, body):
                                 await dynamo_writer.delete_item(Key=object_key)
                                 count += 1
                 return {"status": "deleted", "count": count}
-            else:
-                return {"status": "pending"}
+            # else:
+            return {"status": "pending", "in_queue": queue_len}
     return {"status": "skipped", "reason": f"Unknow action={action}"}
