@@ -9,6 +9,8 @@ export
 install:  ## install project dependencies
 	# allow vscode to use python env in devcontainer to suggest 
 	pip install -r src/scripting/requirements.txt
+	# install type hinting requirements for python
+	pip install -r typing-requirements.txt
 	# install hasura cli if not yet installed
 	[ -f /usr/local/bin/hasura ] || curl -L https://github.com/hasura/graphql-engine/raw/stable/cli/get.sh | bash
 

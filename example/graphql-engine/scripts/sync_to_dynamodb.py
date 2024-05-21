@@ -16,7 +16,7 @@ async def main(request: web.Request, body):
     logger = logging.getLogger("sync_to_dynamodb.py")
     with tracer.start_as_current_span("sync_to_dynamodb.py") as span:
         payload = body
-        BATCH_SIZE = request.query.get("BATCH_SIZE", 5)
+        BATCH_SIZE = int(request.query.get("BATCH_SIZE", 5))
 
         # require redis client to be initialized, HASURA_GRAPHQL_REDIS_URL
         # or HASURA_GRAPHQL_REDIS_CLUSTER_URL must be set in environment
@@ -88,7 +88,8 @@ async def main(request: web.Request, body):
                     {"AttributeName": "id", "AttributeType": "S"},
                     {"AttributeName": "created_at", "AttributeType": "N"},
                 ],
-                ProvisionedThroughput={"ReadCapacityUnits": 5, "WriteCapacityUnits": 5},
+                # on-demand capacity mode
+                BillingMode="PAY_PER_REQUEST",
             )
             # create a waiter to wait for the table to be provisioned if required to do so.
             provisioning_waiter = boto3_dynamodb.meta.client.get_waiter("table_exists")
@@ -105,6 +106,7 @@ async def main(request: web.Request, body):
                 objects_batch = await r.rpop(sync_queue_name, BATCH_SIZE)
                 if objects_batch:
                     with tracer.start_as_current_span("dynamodb.batch_write_item"):
+                        count = 0
                         if provisioning_waiter:
                             await provisioning_waiter.wait(TableName=table_name)
                         # TODO: handle failure of batch write, send to dead letter queue
@@ -118,6 +120,7 @@ async def main(request: web.Request, body):
                                 # set TTL to 7 days (dynamodb uses epoch in seconds)
                                 object_data["ttl"] = int(time.time()) + 7 * 24 * 60 * 60
                                 await dynamo_writer.put_item(Item=object_data)
+                                count += 1
                         return {"status": "updated", "count": count}
                 # else (no objects in the queue)
                 return {"status": "skipped", "message": "No objects in the queue"}

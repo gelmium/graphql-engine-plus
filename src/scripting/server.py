@@ -406,7 +406,7 @@ def exec_and_verify_script(exec_content: str):
         exec(exec_content)
         exec_main_func = locals()["main"]
     except Exception as e:
-        if isinstance(e, KeyError):
+        if isinstance(e, KeyError) and "main" in str(e):
             raise ValueError(
                 "The script must define this function `async def main(request: aiohttp.web_request.Request, body):`"
             )
@@ -484,7 +484,7 @@ async def upload_script_handler(request: web.Request):
                     else:
                         exec_cache_key = f"exec:{script_file.filename}"
                     exec_cache.pop(exec_cache_key, None)
-                    await exec_cache.setdefault(
+                    await exec_cache.set(
                         exec_cache_key, exec_main_func, exec_content
                     )
                     # also write the script to local file system
