@@ -61,10 +61,10 @@ event_triggers:
       update:
         columns: '*'
     retry_conf:
-      interval_sec: 10
-      num_retries: 0
-      timeout_sec: 60
-    webhook: http://localhost:8880/execute
+      interval_sec: 30
+      num_retries: 2
+      timeout_sec: 120
+    webhook: http://localhost:8880/execute?BATCH_SIZE=20
     headers:
       - name: X-Engine-Plus-Execute-File
         value: sync_to_dynamodb.py
