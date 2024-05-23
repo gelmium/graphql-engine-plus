@@ -12,28 +12,18 @@ async def main(request: web.Request, body):
     # logger = logging.getLogger("quick_validate.py")
     # validate the input data
     import msgspec
-    from typing import Annotated, Optional, List
-    from datetime import date, datetime
-
-    class InsertCustomer(msgspec.Struct):
-        first_name: str
-        last_name: str
-        external_ref_list: List[str]
-        id: Optional[str] = None
-        date_of_birth: Optional[date] = None
-        gender: Annotated[int, msgspec.Meta(ge=0, le=9)] = None
-        created_at: Optional[datetime] = None
-        updated_at: Optional[datetime] = None
+    from typing import List
+    from lib_types import InsertCustomer
 
     for c in msgspec.convert(body.data.input, type=List[InsertCustomer]):
         if c.id is not None:
-            raise ValueError("id must not be specified when insert")
+            raise msgspec.ValidationError("id must not be specified when insert")
         if c.created_at is not None:
-            raise ValueError("created_at must not be specified when insert")
+            raise msgspec.ValidationError("created_at must not be specified when insert")
         if c.updated_at is not None:
-            raise ValueError("updated_at must not be specified when insert")
+            raise msgspec.ValidationError("updated_at must not be specified when insert")
         if c.first_name == c.last_name:
-            raise ValueError("first_name is the same as last_name")
+            raise msgspec.ValidationError("first_name is the same as last_name")
     # you can do more validation using graphql_client or redis_client
     # from gql import gql
     # graphql_client: Client = request.app["graphql_client"]

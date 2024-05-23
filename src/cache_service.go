@@ -132,6 +132,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 			if err != nil {
 				slog.Error("Error when get groupcache cluster nodes from REDIS", "error", err.Error())
 				// use the input groupcacheUrlsSlice instead of cluster nodes from REDIS
+				// we dont need to sort the groupcacheUrlsSlice as groupcache consistent hash will always sort the nodes
 				pool.Set(groupcacheUrlsSlice...)
 			} else {
 				// check if the current groupcacheUrl is in the groupcacheNodeUrls

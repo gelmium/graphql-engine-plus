@@ -35,6 +35,8 @@ async_tasks = []
 exec_cache = InternalExecCache()
 # constants
 BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
+# add the scripts path to sys.path
+sys.path.append(BASE_SCRIPTS_PATH)
 # environment variables
 ENGINE_PLUS_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
 if ENGINE_PLUS_ENABLE_BOTO3:
