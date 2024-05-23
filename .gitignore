@@ -2,10 +2,14 @@
 .vscode
 .env
 .make.env
+.hasura-cli.env
 *.out
 *.log
+build
+build/*
 report.html
 report*.json
+test-script*.py
 # add ignore rules for python
 *.py[cod]
 __pycache__/

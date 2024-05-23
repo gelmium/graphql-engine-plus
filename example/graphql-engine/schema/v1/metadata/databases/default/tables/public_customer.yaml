@@ -17,10 +17,10 @@ insert_permissions:
         definition:
           forward_client_headers: true
           headers:
-            - name: X-Engine-Plus-Execute-Secret
-              value: '{{ENGINE_PLUS_EXECUTE_SECRET}}'
+            - name: X-Engine-Plus-Execute-File
+              value: validate/quick_validate.py
           timeout: 10
-          url: http://localhost:8880/validate?execurl=https://gist.githubusercontent.com/0xGosu/d21551c4134341091b3213b9dd63c06e/raw/quick_validate.py
+          url: http://localhost:8880/validate
         type: http
     comment: ""
 select_permissions:
@@ -51,35 +51,22 @@ update_permissions:
       check: null
     comment: ""
 event_triggers:
-  - name: sync_to_dynamodb2
+  - name: sync_to_dynamo_db_trigger
     definition:
       delete:
         columns: '*'
       enable_manual: true
+      insert:
+        columns: '*'
       update:
-        columns:
-          - updated_at
+        columns: '*'
     retry_conf:
-      interval_sec: 60
+      interval_sec: 30
       num_retries: 2
-      timeout_sec: 300
-    webhook: http://localhost:8880/execute
+      timeout_sec: 120
+    webhook: http://localhost:8880/execute?BATCH_SIZE=20
     headers:
+      - name: X-Engine-Plus-Execute-File
+        value: sync_to_dynamodb.py
       - name: X-Engine-Plus-Execute-Secret
         value_from_env: ENGINE_PLUS_EXECUTE_SECRET
-    request_transform:
-      body:
-        action: transform
-        template: |-
-          {
-            "execurl": "https://gist.githubusercontent.com/0xGosu/d21551c4134341091b3213b9dd63c06e/raw/sync_to_dynamodb.py",
-            "execfresh": false,
-            "execproxy": "https://jqpvegwtmm.ap-southeast-1.awsapprunner.com/public/execute",
-            "params": {
-              "BATCH_SIZE": 10,
-              "ONLY_SYNC_CHANGES_FROM_GRAPHQL": true
-            },
-            "payload": $body
-          }
-      template_engine: Kriti
-      version: 2

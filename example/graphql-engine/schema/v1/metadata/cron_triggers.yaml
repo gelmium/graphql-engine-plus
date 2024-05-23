@@ -1,1 +1,60 @@
-[]
+- name: sync_to_dynamodb_cron_sync_delete
+  webhook: http://localhost:8880/execute?BATCH_SIZE=1&IS_CRON_JOB=true
+  schedule: '*/5 * * * *'
+  include_in_metadata: true
+  payload:
+    event:
+      op: DELETE
+    table:
+      name: customer
+      schema: public
+  headers:
+    - name: X-Engine-Plus-Execute-File
+      value: sync_to_dynamodb.py
+    - name: X-Engine-Plus-Execute-Secret
+      value_from_env: ENGINE_PLUS_EXECUTE_SECRET
+  comment: ""
+  request_transform:
+    body:
+      action: transform
+      template: |-
+        {
+          "event": {{$body.payload.event}},
+          "id": {{$body.id}},
+          "table": {{$body.payload.table}},
+          "trigger": {
+            "name": {{$body.name}}
+          }
+        }
+    template_engine: Kriti
+    version: 2
+- name: sync_to_dynamodb_cron_sync_update
+  webhook: http://localhost:8880/execute?BATCH_SIZE=1&IS_CRON_JOB=true
+  schedule: '*/5 * * * *'
+  include_in_metadata: true
+  payload:
+    event:
+      op: UPDATE
+    table:
+      name: customer
+      schema: public
+  headers:
+    - name: X-Engine-Plus-Execute-File
+      value: sync_to_dynamodb.py
+    - name: X-Engine-Plus-Execute-Secret
+      value_from_env: ENGINE_PLUS_EXECUTE_SECRET
+  comment: ""
+  request_transform:
+    body:
+      action: transform
+      template: |-
+        {
+          "event": {{$body.payload.event}},
+          "id": {{$body.id}},
+          "table": {{$body.payload.table}},
+          "trigger": {
+            "name": {{$body.name}}
+          }
+        }
+    template_engine: Kriti
+    version: 2

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -30,12 +29,25 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 	)
 	defer span.End() // end tracer span
+	// do some validation on the cacheData by checking its length
+	if len(cacheData) <= 8 {
+		err := fmt.Errorf("invalid cache data length")
+		span.RecordError(err)
+		return err
+	}
 	// first 8 bytes of the cacheData is the length of the response body
+
 	// read the length of the response body
 	bodyLength := binary.LittleEndian.Uint64(cacheData[:8])
 	// read the response cacheBody
+	if len(cacheData) < 8+int(bodyLength) {
+		err := fmt.Errorf("mising cache body in cache data")
+		span.RecordError(err)
+		return err
+	}
+	// if the cacheData is longer than the 8+bodyLength, we ignore the extra data
 	cacheBody := cacheData[8 : 8+bodyLength]
-	// read the response cacheMeta
+	// read the cache Json from cacheBody (this include the response cache data and the cache header meta)
 	redisCachedResponseResult := CacheResponseRedis{}
 	if err := JsoniterConfigFastest.Unmarshal(cacheData[8+bodyLength:], &redisCachedResponseResult); err != nil {
 		log.Error("Failed to unmarshal cache meta: ", err)
@@ -49,8 +61,8 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	if redisCachedResponseResult.ContentEncoding != "" {
 		c.Set("Content-Encoding", redisCachedResponseResult.ContentEncoding)
 	}
-	c.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
-	c.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
+	c.Set("X-Hasura-Query-Cache-Key", FormatCacheKey(cacheKey))
+	c.Set("X-Hasura-Query-Family-Cache-Key", FormatFamilyKey(familyCacheKey))
 	// caculate max-age based on the cache expiresAt
 	maxAge := redisCachedResponseResult.ExpiresAt - time.Now().Unix()
 	if maxAge < 0 {
@@ -67,9 +79,9 @@ func SendCachedResponseBody(c *fiber.Ctx, cacheData []byte, ttl int, familyCache
 	return c.Status(200).Send(cacheBody)
 }
 
-func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64, traceOpts TraceOptions) {
+func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response, redisCacheClient *RedisCacheClient, ttl int, familyCacheKey uint64, cacheKey uint64) {
 	// start tracer span
-	spanCtx, span := traceOpts.tracer.Start(traceOpts.ctx, "ReadResponseBodyAndSaveToCache",
+	spanCtx, span := tracer.Start(ctx, "ReadResponseBodyAndSaveToCache",
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 	)
 	defer span.End() // end tracer span
@@ -93,18 +105,17 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	cacheData = append(cacheData, cacheMeta...)
 	// cacheData consist of the response body and the cache meta
 	redisKey := CreateRedisKey(familyCacheKey, cacheKey)
-	if err := redisCacheClient.Set(ctx, redisKey, cacheData, time.Duration(ttl)*time.Second,
-		TraceOptions{tracer, spanCtx}); err != nil {
+	if err := redisCacheClient.Set(spanCtx, redisKey, cacheData, ttl); err != nil {
+		// This can be consider a warning as it doesn't affect the response
 		log.Error("Failed to save cache to redis: ", err)
-		span.RecordError(err)
-		return
+		return // return to avoid setting the cache key in the response header
 	}
-	resp.Header.Set("X-Hasura-Query-Cache-Key", strconv.FormatUint(cacheKey, 10))
-	resp.Header.Set("X-Hasura-Query-Family-Cache-Key", strconv.FormatUint(familyCacheKey, 10))
+	resp.Header.Set("X-Hasura-Query-Cache-Key", FormatCacheKey(cacheKey))
+	resp.Header.Set("X-Hasura-Query-Family-Cache-Key", FormatFamilyKey(familyCacheKey))
 	resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
 }
 
-var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(os.Getenv("HASURA_GRAPHQL_JWT_SECRET"))
+var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(hasuraGqlJwtSecret)
 
 // TODO: allow this Regex to be configurable via environment variable
 var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type|X-Envoy-External-Address|X-Envoy-Expected-Rq-Timeout-Ms)$`)
@@ -121,51 +132,59 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 	// loop through the header from the original request
 	// and add it to the hash
 	headers := []string{}
-	for k, v := range c.GetReqHeaders() {
-		// filter out the header that we don't want to cache
-		// such as: Host, Connection, ...
-		if notCacheHeaderRegex.MatchString(k) {
-			continue
-		}
-		if (k == jwtAuthParserConfig.Header.Type || k == "Authorization") && v[:7] == "Bearer " {
-			// TODO: read the JWT token from the request header
-			// extract token from the header by remove "Bearer a"
-			tokenString := string(v[7:])
-			claims, err := jwtAuthParserConfig.ParseJwt(tokenString)
-			// remove timestamp from claims
-			delete(claims, "exp")
-			delete(claims, "nbf")
-			delete(claims, "iat")
-			// remove jwt id from claims
-			delete(claims, "jti")
-			// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
-			// the RegEx should be configurable via environment variable
-			if err != nil {
-				log.Error("Failed to parse JWT token: ", err)
-			} else {
-				// convert the entire claims to json string
-				// and add it to the hash
-				// this claims has the timestamp removed already.
-				if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
-					log.Error("Failed to marshal claims: ", err)
+	for k, vList := range c.GetReqHeaders() {
+		// loop through the header values vList
+		for _, v := range vList {
+			// filter out the header that we don't want to cache
+			// such as: Host, Connection, ...
+			if notCacheHeaderRegex.MatchString(k) {
+				continue
+			}
+			if (k == jwtAuthParserConfig.Header.Type || k == "Authorization") && v[:7] == "Bearer " {
+				// TODO: read the JWT token from the request header
+				// extract token from the header by remove "Bearer a"
+				tokenString := string(v[7:])
+				claims, err := jwtAuthParserConfig.ParseWithoutVerifyJwt(tokenString)
+				if err != nil {
+					log.Error("Failed to parse JWT token: ", err)
 				} else {
-					log.Debug("Compute cache keys with claims: ", claims)
-					h.Write(claimsJsonByteString)
+					// remove timestamp from claims
+					delete(claims, "exp")
+					delete(claims, "nbf")
+					delete(claims, "iat")
+					// remove jwt id from claims
+					delete(claims, "jti")
+					// TODO: traverse the claims and remove the claims that we don't want to cache using Regular Expression
+					// the RegEx should be configurable via environment variable
+					for claimKey, claimValue := range claims {
+						// convert interface to string using Sprintf
+						header := k + ":jwt.Claims<" + claimKey + ":" + fmt.Sprintf("%v", claimValue) + ">"
+						headers = append(headers, header)
+					}
+					// convert the entire claims to json string
+					// and add it to the hash
+					// this claims has the timestamp removed already.
+					// if claimsJsonByteString, err := JsoniterConfigFastest.Marshal(claims); err != nil {
+					// 	log.Error("Failed to marshal claims: ", err)
+					// } else {
+					// 	log.Debug("Compute cache keys with claims: ", claims)
+					// 	h.Write(claimsJsonByteString)
+					// }
 					// continue to skip this header
 					continue
 				}
+				// other while this header key and value will be added to the hash as below
 			}
-			// other while this header key and value will be added to the hash as below
+			// print the header key and value
+			header := k + ":" + v
+			headers = append(headers, header)
 		}
-		// print the header key and value
-		header := k + ":" + v
-		headers = append(headers, header)
 	}
 	// sort the header key and value
 	// to make sure that the hash is always the same
 	// even if the header key and value is not in the same order
 	sort.Strings(headers)
-	log.Debug("Compute cache keys with headers: ", headers)
+	// log.Debug("Compute cache keys with headers: ", headers)
 	for _, header := range headers {
 		h.Write([]byte(header))
 	}
@@ -176,5 +195,13 @@ func CalculateCacheKey(c *fiber.Ctx, graphqlReq *GraphQLRequest) (uint64, uint64
 }
 
 func CreateRedisKey(familyKey uint64, cacheKey uint64) string {
-	return "graphql-engine-plus:" + strconv.FormatUint(familyKey, 36) + ":" + strconv.FormatUint(cacheKey, 36)
+	return "graphql-engine-plus:" + FormatFamilyKey(familyKey) + ":" + FormatCacheKey(cacheKey)
+}
+
+func FormatFamilyKey(familyKey uint64) string {
+	return strconv.FormatUint(familyKey, 36)
+}
+
+func FormatCacheKey(cacheKey uint64) string {
+	return strconv.FormatUint(cacheKey, 36)
 }

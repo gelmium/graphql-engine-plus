@@ -6,9 +6,10 @@
         from_env: HASURA_GRAPHQL_DATABASE_URL
       isolation_level: read-committed
       pool_settings:
+        pool_timeout: 110  # default is wait forever, set to 110 because the graphql-engine-plus has a 110s hard timeout
         connection_lifetime: 600
         idle_timeout: 180
-        max_connections: 20
+        max_connections: 10  # default is 50, recommended to set to a lower value when deploy with auto scaling
         retries: 1
-      use_prepared_statements: false
+      use_prepared_statements: true  # default is false
   tables: "!include default/tables/tables.yaml"

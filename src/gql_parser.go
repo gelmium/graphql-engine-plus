@@ -45,9 +45,8 @@ func (req *GraphQLRequest) IsSubscriptionGraphQLRequest() bool {
 // return -1 if the query is a cached query with indefinite ttl
 // return ttl (seconds) if the query is a cached query with ttl.
 func (req *GraphQLRequest) IsCachedQueryGraphQLRequest() int {
-	// according to hasura docs
-	// max ttl allowed value is 300 seconds
-	maxTTL := 300
+	// According to Hasura default max ttl is 3600 seconds
+	maxTTL := int(hasuraGqlCacheMaxEntryTtl)
 	// check if the query is a subscription with regex
 	if cachedQueryRegex.MatchString(req.Query) {
 		match := cachedParamsRegex.FindStringSubmatch(req.Query)

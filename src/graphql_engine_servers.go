@@ -59,7 +59,7 @@ func StartGraphqlEngineServers(
 	// create a waitgroup to wait for all cmds to finish
 	var wg sync.WaitGroup
 	// start scripting-server at port 8880
-	log.Info("Starting scripting-server at unix /tmp/scripting.sock and port 8880")
+	log.Info("Starting scripting-server at unix /tmp/scripting.sock and tcp 8880")
 	cmd0 := exec.CommandContext(ctx, "python3", "/graphql-engine/scripting/server.py", "--path", "/tmp/scripting.sock", "--port", "8880")
 	// route the output to stdout
 	cmd0.Stderr = os.Stderr
@@ -76,7 +76,9 @@ func StartGraphqlEngineServers(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		cmd0.Wait()
+		if err := cmd0.Wait(); err != nil {
+			log.Error("scripting-server exited with error:", err)
+		}
 	}()
 	cmds = append(cmds, cmd0)
 	log.Info("Starting graphql-engine primary at port 8881")
@@ -97,23 +99,24 @@ func StartGraphqlEngineServers(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		cmd1.Wait()
+		if err := cmd1.Wait(); err != nil {
+			log.Error("primary-engine exited with error:", err)
+		}
 	}()
 	cmds = append(cmds, cmd1)
 
 	// start graphql-engine with database point to REPLICA, if the env is set
-	if os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS") != "" {
-		metadataDatabaseUrl := os.Getenv("HASURA_GRAPHQL_METADATA_DATABASE_URL")
-		if metadataDatabaseUrl == "" {
-			metadataDatabaseUrl = os.Getenv("HASURA_GRAPHQL_DATABASE_URL")
+	if hasuraGqlReadReplicaUrls != "" {
+		// if HASURA_GRAPHQL_METADATA_DATABASE_URL is not specified use HASURA_GRAPHQL_DATABASE_URL
+		if hasuraGqlMetadataDatabaseUrl == "" {
+			hasuraGqlMetadataDatabaseUrl = hasuraGqlDatabaseUrl
 		}
 		log.Info("Starting graphql-engine read replica at port 8882")
-		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", metadataDatabaseUrl, "serve", "--server-port", "8882")
-		replicaUrlsString := os.Getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
-		replicaUrlList := strings.Split(replicaUrlsString, ",")
+		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", hasuraGqlMetadataDatabaseUrl, "serve", "--server-port", "8882")
+		replicaUrlList := strings.Split(hasuraGqlReadReplicaUrls, ",")
 		cmd2Env := os.Environ()
 		if len(replicaUrlList) > 1 {
-			// if there are more than 1 urls in HASURA_GRAPHQL_READ_REPLICA_URLS
+			// if there are more than 1 urls in hasuraGqlReadReplicaUrls
 			// each url in replicaUrList must be in a form of ENV_KEY=url
 			cmd2.Env = append(cmd2Env, replicaUrlList...)
 		} else {
@@ -147,7 +150,9 @@ func StartGraphqlEngineServers(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cmd2.Wait()
+			if err := cmd2.Wait(); err != nil {
+				log.Error("replica-engine exited with error:", err)
+			}
 		}()
 		cmds = append(cmds, cmd2)
 		// loop for the readonly replica-engine to start, we dont need to wait for it
@@ -199,7 +204,7 @@ func StartGraphqlEngineServers(
 			break
 		}
 	}
-	// Wait for any process to exit, does not matter if it is graphql-engine, python or nginx
+	// Wait for any process to exit, does not matter if it is hasura-graphql-engine or python
 	check := true
 	for loop := true; loop; {
 		// check if ctx is canceled while waiting
@@ -243,8 +248,6 @@ func StartGraphqlEngineServers(
 				shutdownErrorChanel <- nil
 			}
 			close(shutdownErrorChanel)
-			loop = false
-			check = false
 			return
 		default:
 			// loop through all cmds of processes to check if any of them is exited

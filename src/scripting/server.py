@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 import random
@@ -21,29 +22,30 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from opentelemetry import trace
 from opentelemetry.sdk.trace import Span
-from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry import propagate
 from opentelemetry.propagators.textmap import Getter
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-from opentelemetry.propagators.aws import AwsXRayPropagator
 from opentelemetry.instrumentation.aiohttp_client import create_trace_config
 import socket
+from exec_cache import InternalExecCache
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
-exec_cache = {}
-ENGINE_PLUS_ENABLE_BOTO3 = os.environ.get("ENGINE_PLUS_ENABLE_BOTO3")
-# global variable to cache the boto3 session
-if ENGINE_PLUS_ENABLE_BOTO3:
-    boto3_session = aioboto3.Session()
-
-
+exec_cache = InternalExecCache()
+# constants
+BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
+# add the scripts path to sys.path
+sys.path.append(BASE_SCRIPTS_PATH)
 # environment variables
-ENGINE_PLUS_ALLOW_EXECURL = os.environ.get("ENGINE_PLUS_ALLOW_EXECURL")
-ENGINE_PLUS_EXECUTE_SECRET = os.environ.get(
-    "ENGINE_PLUS_EXECUTE_SECRET", os.environ["HASURA_GRAPHQL_ADMIN_SECRET"]
-)
+ENGINE_PLUS_ENABLE_BOTO3 = os.getenv("ENGINE_PLUS_ENABLE_BOTO3")
+if ENGINE_PLUS_ENABLE_BOTO3:
+    # this is a global variable to reuse the boto3 session
+    boto3_session = aioboto3.Session(region_name=os.getenv("AWS_REGION"))
+
+ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
+ENGINE_PLUS_EXECUTE_SECRET = os.getenv("ENGINE_PLUS_EXECUTE_SECRET")
+DEBUG_MODE = os.getenv("DEBUG", "").lower() in {"true", "t", "1"}
 
 logger = logging.getLogger("scripting-server")
 # Pre create json encoder/decoder for server to reuse for every request
@@ -51,7 +53,7 @@ json_encoder = msgspec.json.Encoder()
 json_decoder = msgspec.json.Decoder()
 
 # setup telemetry
-otel_exporter_type = os.environ.get("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY", "")
+otel_exporter_type = os.getenv("ENGINE_PLUS_ENABLE_OPEN_TELEMETRY", "")
 ENABLE_OTEL = True
 if otel_exporter_type == "grpc":
     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -94,10 +96,9 @@ class AiohttpRequestGetter(Getter):
 
 # Creates a tracer from the global tracer provider
 tracer = trace.get_tracer("graphql-engine-plus")
-# Create propagators and getter
-propagators = CompositePropagator(
-    [TraceContextTextMapPropagator(), AwsXRayPropagator()]
-)
+# Create propagators with default value from environment
+propagators = propagate.get_global_textmap()
+# Create a custom getter for aiohttp request
 requestGetter = AiohttpRequestGetter()
 
 
@@ -118,8 +119,6 @@ async def start_as_current_span_async(
         None
     """
     attrs = kwargs.get("attributes", {})
-    # override the service name as this server is embedded in the graphql-engine-plus
-    # attrs["service.name"] = "scripting-server"
     # do context extraction only if request is passed and ENABLE_OTEL is enabled
     if ENABLE_OTEL and request:
         if not kwargs.get("context"):
@@ -154,215 +153,169 @@ def backoff_retry(i):
     return 0.1 * i + random.random() * (3.0 + 0.3 * i)
 
 
-async def exec_script(request: web.Request, body):
-    # for key, value in request.headers.items():
-    #     print(f"Header: key={key}, value={value}")
-    # remote execution via proxy
-    execproxy = body.get("execproxy")
-    if execproxy:
-        # remove the execproxy from body, to prevent infinite loop
-        del body["execproxy"]
-        # forward the request to execproxy
-        req_body = json_encoder.encode(body)
-        req_headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "graphql-engine-plus/v1.0.0",
-        }
-        # loop through the request headers and copy to req_headers
-        disallowed_headers = set(
-            list(req_headers.keys()) + ["Host", "Content-Length", "Accept-Encoding"]
+async def exec_script(request: web.Request, config) -> web.Response:
+    async with start_as_current_span_async(
+        "exec-script",
+        kind=trace.SpanKind.INTERNAL,
+    ) as parent:
+        parent.set_attribute(
+            "scripting_server.exec", config.get("execfile", config.get("execurl", ""))
         )
-        for key, value in request.headers.items():
-            if key not in disallowed_headers:
-                req_headers[key] = value
-        # set traces if OTEL is enabled
-        if ENABLE_OTEL:
-            # This will not Remove query params from the URL attribute on the span.
-            trace_config_list = [create_trace_config()]
-        else:
-            trace_config_list = None
-        async with aiohttp.ClientSession(
-            trace_configs=trace_config_list
-        ) as http_session:
-            max_retries = int(body.get("execproxy_max_retries", 15))
-            for i in range(1, max_retries + 1):
-                try:
-                    async with http_session.post(
-                        execproxy, data=req_body, headers=req_headers
-                    ) as resp:
-                        text_body = await resp.text()
-                        # check if the response is 200
-                        if resp.status == 200:
-                            try:
-                                body["payload"] = json_decoder.decode(text_body)
-                            except msgspec.DecodeError:
-                                body["payload"] = text_body
-                            body["execution_time"] = resp.headers.get(
-                                "X-Execution-Time"
-                            )
-                            break
-                        elif resp.status == 429:
-                            # App Runner 429 headers doesnt contain Retry-After but only x-envoy-upstream-service-time
-                            # extract the "Retry-After" header
-                            retry_after = resp.headers.get("Retry-After")
-                            if retry_after:
-                                retry_after = min(float(retry_after), 29.0)
-                            else:
-                                retry_after = backoff_retry(i)
-                            logger.info(
-                                f"Rate limited by App Runner, retrying after {retry_after} seconds"
-                            )
-                            body["status_code"] = 429
-                            # retry after advised/random seconds
-                            await asyncio.sleep(retry_after)
-                            continue
-                        else:
-                            logger.error(
-                                f"Error status={resp.status} in forwarding the request to {resp.url}, body={text_body}"
-                            )
-                            body["status_code"] = resp.status
-                            raise Exception(
-                                f"Error status={resp.status} in forwarding the request to {resp.url}"
-                            )
-                except (aiohttp.ClientOSError, aiohttp.ClientConnectorError) as e:
-                    # these are retryable errors, auto retry right away
-                    await asyncio.sleep(backoff_retry(i))
-                    logger.error(
-                        f"Got {e.__class__.__name__} (tries: {i}) while forwarding the request to {execproxy}: {e.strerror}"
+        # load script content
+        async with start_as_current_span_async(
+            "load",
+            kind=trace.SpanKind.INTERNAL,
+        ):
+            exec_main_func = None
+            execfile = config.get("execfile")
+            if execfile:
+                exec_cache_key = f"exec:{execfile}"
+                if not DEBUG_MODE:
+                    exec_main_func = await exec_cache.get(exec_cache_key)
+                if not exec_main_func:
+                    async with start_as_current_span_async(
+                        "read-execfile",
+                        kind=trace.SpanKind.INTERNAL,
+                    ):
+                        with open(os.path.join(BASE_SCRIPTS_PATH, execfile), "r") as f:
+                            exec_content = f.read()
+                    # load script with exec and extract the main function
+                    exec_main_func = await exec_cache.execute_get_main(
+                        exec_cache_key, exec_content
                     )
+            # Execute script from an URL (execurl), only if execfile is not provided
+            # The execute from URL feature is required only if want to
+            # add/modify existing python script on the fly without deployment
+            # via the Hasura Console. For security reason, this feature is disabled by default
+            # recommend to use /upload endpoint to upload the new/modified script file instead.
+            execurl = config.get("execurl")
+            if ENGINE_PLUS_ALLOW_EXECURL:
+                if execurl and not execfile:
+                    # this is to increase security to prevent unauthorized script execution from URL
+                    req_execute_secret = request.headers.get(
+                        "X-Engine-Plus-Execute-Secret"
+                    )
+                    if not req_execute_secret:
+                        raise ValueError(
+                            "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL"
+                        )
+                    if req_execute_secret != ENGINE_PLUS_EXECUTE_SECRET:
+                        raise ValueError(
+                            "The value of header X-Engine-Plus-Execute-Secret is not matched the value of ENGINE_PLUS_EXECUTE_SECRET"
+                        )
+                    exec_cache_key = f"exec:{execurl}"
+                    if not DEBUG_MODE:
+                        exec_main_func = await exec_cache.get(exec_cache_key)
+                    if not exec_main_func:
+                        async with start_as_current_span_async(
+                            "fetch-execurl",
+                            kind=trace.SpanKind.INTERNAL,
+                        ):
+                            async with aiohttp.ClientSession() as http_session:
+                                async with http_session.get(
+                                    execurl, headers={"Cache-Control": "no-cache"}
+                                ) as resp:
+                                    exec_content = await resp.text()
+                        # load script with exec and extract the main function
+                        exec_main_func = await exec_cache.execute_get_main(
+                            exec_cache_key, exec_content
+                        )
             else:
-                raise Exception(
-                    f"Max retries exceeded ({max_retries}) when forwarding the request to {execproxy}"
-                )
-        # the execution is forwarded to execproxy
-        # so we can return here, body["payload"] is set
-        # with the result of execution from execproxy
-        return
-    # local script execution
-    exec_main_func = None
-    execfile = body.get("execfile")
-    if execfile:
-        exec_main_func = exec_cache.get(execfile)
-        if not exec_main_func or body.get("execfresh"):
-            async with start_as_current_span_async(
-                "read-execfile",
-                kind=trace.SpanKind.INTERNAL,
-            ):
-                with open(os.path.join("/graphql-engine/scripts", execfile), "r") as f:
-                    exec(f.read())
+                if execurl:
+                    raise ValueError(
+                        "To execute script from URL, you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
+                    )
+        # exec_main_func must be loaded before this line so
+        # it can be executed here in curent context
+        if not exec_main_func:
+            raise ValueError(
+                "At least one of these headers must be specified: X-Engine-Plus-Execute-File, X-Engine-Plus-Execute-Url"
+            )
+        # execution of the script
+        # The script must define this function: `async def main(request, body):`
+        async with start_as_current_span_async(
+            "run",
+            kind=trace.SpanKind.INTERNAL,
+        ):
             try:
-                exec_main_func = exec_cache[execfile] = locals()["main"]
-            except KeyError:
-                raise Exception(
+                task = asyncio.get_running_loop().create_task(
+                    exec_main_func(request, config["body"])
+                )
+            except TypeError:
+                raise ValueError(
                     "The script must define this function: `async def main(request, body):`"
                 )
-
-    # The `execurl` feature is required only if want to
-    # add new script/modify existing script on the fly without deployment
-    execurl = body.get("execurl")
-    if ENGINE_PLUS_ALLOW_EXECURL:
-        if execurl and not execfile:
-            # this is to increase security to prevent unauthorized script execution from URL
-            req_execute_secret = request.headers.get("X-Engine-Plus-Execute-Secret")
-            if not req_execute_secret:
-                raise ValueError(
-                    "The header X-Engine-Plus-Execute-Secret is required in request to execute script from URL (execurl)"
-                )
-            if req_execute_secret != ENGINE_PLUS_EXECUTE_SECRET:
-                raise ValueError(
-                    "The value of header X-Engine-Plus-Execute-Secret is not matched the value of ENGINE_PLUS_EXECUTE_SECRET"
-                )
-            exec_main_func = exec_cache.get(execurl)
-            if not exec_main_func or body.get("execfresh"):
-                async with start_as_current_span_async(
-                    "fetch-execurl",
-                    kind=trace.SpanKind.INTERNAL,
-                ):
-                    async with aiohttp.ClientSession() as http_session:
-                        async with http_session.get(
-                            execurl, headers={"Cache-Control": "no-cache"}
-                        ) as resp:
-                            exec(await resp.text())
-                exec_main_func = exec_cache[execurl] = locals()["main"]
-    else:
-        if execurl:
-            raise Exception(
-                "To execute script from URL (execurl), you must set value for these environment: ENGINE_PLUS_ALLOW_EXECURL, ENGINE_PLUS_EXECUTE_SECRET"
-            )
-    # the script must define this function: `async def main(request, body, transport):`
-    # so it can be executed here in curent context
-    if not exec_main_func:
-        raise Exception(
-            "At least one of these parameter must be specified: execfile, execurl"
-        )
-    try:
-        task = asyncio.get_running_loop().create_task(exec_main_func(request, body))
-    except TypeError:
-        raise Exception(
-            "The script must define this function: `async def main(request, body):`"
-        )
-    if getattr(body, "execasync", False):
-        async_tasks.append(task)
-        task.add_done_callback(lambda x: async_tasks.remove(task))
-    else:
-        await task
+            # schedule to run the task and wait for result.
+            return await task
 
 
 async def execute_code_handler(request: web.Request):
     # And execute the Python code.
     # mark starting time
     request.start_time = time.time()
+    config = {
+        "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
+        "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
+    }
     async with start_as_current_span_async(
         "scripting-server: /execute",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
         try:
-            # Get the Python code from the JSON request body
-            body = {}
-            body = json_decoder.decode(await request.text())
-            parent.set_attribute(
-                "scripting_server.exec", body.get("execfile", body.get("execurl", ""))
-            )
-            parent.set_attribute(
-                "scripting_server.execproxy", body.get("execproxy", "")
-            )
-            parent.set_attribute(
-                "scripting_server.execfresh", bool(body.get("execfresh", False))
-            )
-            parent.set_attribute(
-                "scripting_server.execasync", bool(body.get("execasync", False))
-            )
-            ### execute the python script in the body
-            await exec_script(request, body)
-            ### the script can modify the body['payload'] to transform the return data
+            async with start_as_current_span_async(
+                "parse-body",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                config["body"] = json_decoder.decode(await request.text())
+            ### execute the python script using the configuration
+            result = await exec_script(request, config)
+            # check if result is a web.Response
+            if isinstance(result, web.Response):
+                # calculate the value for X-Execution-Time header
+                x_execution_time = f"{time.time() - request.start_time}"
+                result.headers["X-Execution-Time"] = x_execution_time
+                parent.set_attribute("http.response.status_code", result.status)
+                return result
+            # assume the result is the JSON response and status code is 200
             status_code = 200
-            result = body["payload"]
         except Exception as e:
+            status_code = 400  # Hasura is expect status code to be either 200 or 400
             if isinstance(e, web.HTTPException):
+                if e.status_code > 0:
+                    parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError)):
-                status_code = body.get("status_code", 400)
+                # response with format understandable by Hasura
+                result = {
+                    "message": str(e.__class__.__name__)
+                    + ": "
+                    + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    "extensions": {
+                        "code": str(e.__class__.__name__),
+                    },
+                }
             else:
-                status_code = body.get("status_code", 500)
                 parent.record_exception(e)
-            result = {
-                "error": str(e.__class__.__name__),
-                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
-                "traceback": str(traceback.format_exc()),
-            }
-            logger.error(result)
+                # response with format understandable by Hasura
+                result = {
+                    "message": str(e.__class__.__name__)
+                    + ": "
+                    + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    "extensions": {
+                        "code": str(e.__class__.__name__),
+                        "traceback": str(traceback.format_exc()),
+                    },
+                }
+                # log the error response
+                logger.error(result)
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
-        parent.set_attribute("http.status_code", status_code)
+        parent.set_attribute("http.response.status_code", status_code)
         response_body = json_encoder.encode(result)
-        parent.set_attribute("http.response_content_length", len(response_body))
-        # check if the script set the X-Execution-Time header (execproxy)
-        x_execution_time = body.get("execution_time")
-        if not x_execution_time:
-            x_execution_time = f"{time.time() - request.start_time}"
+        # calculate the value for X-Execution-Time header
+        x_execution_time = f"{time.time() - request.start_time}"
         # Return the result of the Python code execution.
         return web.Response(
             status=status_code,
@@ -390,64 +343,193 @@ validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
 
 async def validate_json_code_handler(request: web.Request):
     # mark starting time
-    start_time = time.time()
+    request.start_time = time.time()
+    config = {
+        "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
+        "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
+    }
     async with start_as_current_span_async(
         "scripting-server: /validate",
         kind=trace.SpanKind.INTERNAL,
         request=request,
     ) as parent:
-        # get the request GET params
-        params = dict(request.query)
-        parent.set_attribute(
-            "scripting_server.exec", params.get("execfile", params.get("execurl", ""))
-        )
-        parent.set_attribute(
-            "scripting_server.execfresh", bool(params.get("execfresh", False))
-        )
         try:
-            # Get the Python code from the params and assign to body
-            payload = validate_json_decoder.decode(await request.text())
-            body = {
-                "payload": payload.data.input,
-                "session": {
-                    "role": payload.role,
-                    "session_variables": payload.session_variables,
-                    "version": payload.version,
-                },
-            }
-            body["execfile"] = params.get("execfile")
-            body["execurl"] = params.get("execurl")
-            body["execfresh"] = params.get("execfresh")
-            ### execute the python script in the body
-            await exec_script(request, body)
-            ### the script can modify the body['payload'] to transform the return data
+            async with start_as_current_span_async(
+                "parse-body",
+                kind=trace.SpanKind.INTERNAL,
+            ):
+                config["body"] = validate_json_decoder.decode(await request.text())
+            ### execute the python script with the configuration
+            result = await exec_script(request, config)
             status_code = 200
-            result = body["payload"]
         except Exception as e:
-            status_code = 400
+            status_code = 400  # Hasura is expect status code to be either 200 or 400
             if isinstance(e, web.HTTPException):
+                if e.status_code > 0:
+                    parent.set_attribute("http.response.status_code", e.status_code)
                 raise e
             elif isinstance(e, (SyntaxError, ValueError, msgspec.ValidationError)):
                 pass
             else:
                 parent.record_exception(e)
+            # response with format understandable by Hasura
             result = {
-                "message": str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                "message": str(e.__class__.__name__)
+                + ": "
+                + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
             }
         # finish the span
         if status_code >= 500:
             parent.set_status(trace.Status(trace.StatusCode.ERROR))
-        parent.set_attribute("http.status_code", status_code)
-        response_body = json_encoder.encode(result)
-        parent.set_attribute("http.response_content_length", len(response_body))
+        parent.set_attribute("http.response.status_code", status_code)
         # Return the result of the Python code execution.
+        if status_code == 200:
+            return web.Response(
+                status=status_code,
+                headers={
+                    "Content-type": "text/plain",
+                    "X-Execution-Time": f"{time.time() - request.start_time}",
+                },
+                body="OK",
+            )
+        response_body = json_encoder.encode(result)
         return web.Response(
             status=status_code,
             headers={
                 "Content-type": "application/json",
-                "X-Execution-Time": f"{time.time() - start_time}",
+                "X-Execution-Time": f"{time.time() - request.start_time}",
             },
             body=response_body,
+        )
+
+
+def exec_and_verify_script(exec_content: str):
+    try:
+        exec(exec_content)
+        exec_main_func = locals()["main"]
+    except Exception as e:
+        if isinstance(e, KeyError) and "main" in str(e):
+            raise ValueError(
+                "The script must define this function `async def main(request: aiohttp.web_request.Request, body):`"
+            )
+        if isinstance(e, SyntaxError):
+            raise ValueError(
+                f"The script has SyntaxError at loc <{e.lineno}:{e.offset}>"
+            )
+        else:
+            raise e
+    if not inspect.iscoroutinefunction(exec_main_func):
+        raise ValueError(
+            "The main function must be an async function `async def main(request: aiohttp.web_request.Request, body):"
+        )
+    signature = inspect.signature(exec_main_func)
+    if str(signature) not in {
+        "(request: aiohttp.web_request.Request, body)",
+        "(request: aiohttp.web_request.Request, body) -> aiohttp.web_response.Response",
+    }:
+        logger.error(
+            f"Invalid signature of main function when upload script: {signature}"
+        )
+        raise ValueError(
+            "The main function must be defined with this signature `async def main(request: aiohttp.web_request.Request, body) -> aiohttp.web_response.Response:"
+        )
+    return exec_main_func
+
+
+async def upload_script_handler(request: web.Request):
+    async with start_as_current_span_async(
+        "scripting-server: /upload",
+        kind=trace.SpanKind.INTERNAL,
+        request=request,
+    ) as parent:
+        # read file content from request body
+        data = await request.post()
+        upload_path = data.get("path", "")
+        upload_file_list = data.getall("file")
+        if len(upload_file_list) == 0:
+            return web.Response(
+                status=400,
+                headers={
+                    "Content-type": "application/json",
+                },
+                body=json_encoder.encode({"message": "At least 1 `file` is required"}),
+            )
+        result = {"success": [], "message": ""}
+        status_code = 200
+        for script_file in upload_file_list:
+            if not hasattr(script_file, "file"):
+                logger.error(f"Invalid file field", extra={"file": script_file})
+                continue
+            exec_content = script_file.file.read().decode("utf-8")
+            try:
+                async with start_as_current_span_async(
+                    "validate-script",
+                    kind=trace.SpanKind.INTERNAL,
+                    attributes={
+                        "script_file.filename": script_file.filename,
+                    },
+                ):
+                    exec_main_func = exec_and_verify_script(exec_content)
+                async with start_as_current_span_async(
+                    "save-script",
+                    kind=trace.SpanKind.INTERNAL,
+                    attributes={
+                        "script_file.filename": script_file.filename,
+                    },
+                ):
+                    # the script is seem to be a valid python script
+                    # we can save it to cache and file system
+                    if len(upload_path):
+                        exec_cache_key = (
+                            f"exec:{os.path.join(upload_path,script_file.filename)}"
+                        )
+                    else:
+                        exec_cache_key = f"exec:{script_file.filename}"
+                    exec_cache.pop(exec_cache_key, None)
+                    await exec_cache.set(
+                        exec_cache_key, exec_main_func, exec_content
+                    )
+                    # also write the script to local file system
+                    if len(upload_path):
+                        # we need to create the folder if not exists
+                        os.makedirs(
+                            os.path.join(BASE_SCRIPTS_PATH, upload_path), exist_ok=True
+                        )
+                    with open(
+                        os.path.join(
+                            BASE_SCRIPTS_PATH, upload_path, script_file.filename
+                        ),
+                        "w",
+                    ) as f:
+                        f.write(exec_content)
+                result["success"].append(script_file.filename)
+            except Exception as e:
+                if isinstance(e, web.HTTPException):
+                    if e.status_code > 0:
+                        parent.set_attribute("http.response.status_code", e.status_code)
+                    raise e
+                if isinstance(e, ValueError):
+                    status_code = 400
+                    result[
+                        "message"
+                    ] += f"Error in {script_file.filename}: {e.args[0]},"
+                else:
+                    parent.record_exception(e)
+                    status_code = 500
+                    result = {
+                        "error": str(e.__class__.__name__),
+                        "message": str(e.__class__.__name__)
+                        + ": "
+                        + str(getattr(e, "msg", e.args[0] if len(e.args) else e)),
+                    }
+                    break
+        # result
+        return web.Response(
+            status=status_code,
+            headers={
+                "Content-type": "application/json",
+            },
+            body=json_encoder.encode(result),
         )
 
 
@@ -465,7 +547,7 @@ async def healthcheck_graphql_engine(request: web.Request):
                 # extract the response status code and body
                 result["primary"] = {"status": resp.status, "body": await resp.text()}
             if (
-                os.environ.get("HASURA_GRAPHQL_READ_REPLICA_URLS")
+                os.getenv("HASURA_GRAPHQL_READ_REPLICA_URLS")
                 and "replica" not in not_include
             ):
                 async with http_session.get(
@@ -505,22 +587,25 @@ async def get_app():
     # Create the HTTP server.
     app = web.Application()
     # init dependencies
-    redis_cluster_url = os.environ.get("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
-    redis_url = os.environ.get("HASURA_GRAPHQL_REDIS_URL")
-    redis_reader_url = os.environ.get("HASURA_GRAPHQL_REDIS_READER_URL")
+    redis_cluster_url = os.getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+    redis_url = os.getenv("HASURA_GRAPHQL_REDIS_URL")
+    redis_reader_url = os.getenv("HASURA_GRAPHQL_REDIS_READER_URL")
     if redis_cluster_url:
         app["redis_client"] = app["redis_cluster"] = await redis.RedisCluster.from_url(
             redis_cluster_url
         )
-        app["redis_client_reader"] = app[
-            "redis_cluster_reader"
-        ] = await redis.RedisCluster.from_url(
-            redis_cluster_url, read_from_replicas=True
+        app["redis_client_reader"] = app["redis_cluster_reader"] = (
+            await redis.RedisCluster.from_url(
+                redis_cluster_url, read_from_replicas=True
+            )
         )
+        exec_cache.set_redis_instance(app["redis_client"])
     if redis_url:
         app["redis_client"] = await redis.from_url(redis_url)
+        exec_cache.set_redis_instance(app["redis_client"])
     if redis_reader_url:
         app["redis_client_reader"] = await redis.from_url(redis_reader_url)
+
     if ENABLE_OTEL and (redis_cluster_url or redis_url or redis_reader_url):
         from opentelemetry.instrumentation.redis import RedisInstrumentor
 
@@ -532,13 +617,15 @@ async def get_app():
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
     if ENGINE_PLUS_ENABLE_BOTO3:
         init_resources = ENGINE_PLUS_ENABLE_BOTO3.split(",")
-        # TODO: add support for different region
         context_stack = contextlib.AsyncExitStack()
         app["boto3_context_stack"] = context_stack
         app["boto3_session"] = boto3_session
         if "dynamodb" in init_resources:
             app["boto3_dynamodb"] = await context_stack.enter_async_context(
-                boto3_session.resource("dynamodb")
+                boto3_session.resource(
+                    "dynamodb",
+                    endpoint_url=os.getenv("AWS_BOTO3_DYNAMODB_ENDPOINT_URL"),
+                )
             )
         if "s3" in init_resources:
             app["boto3_s3"] = await context_stack.enter_async_context(
@@ -557,6 +644,8 @@ async def get_app():
     app.router.add_post("/execute", execute_code_handler)
     # add validate scripting endpoint
     app.router.add_post("/validate", validate_json_code_handler)
+    # add upload script endpoint
+    app.router.add_post("/upload", upload_script_handler)
 
     # register cleanup on shutdown
     app.on_shutdown.append(cleanup_server)
@@ -596,7 +685,7 @@ async def get_app():
         "botocore",
         "aioboto3",
         "aiobotocore",
-        "gql.transport.aiohttp"
+        "gql.transport.aiohttp",
     ]
     # set log level to ERROR for these loggers to reduce log noise
     for name in disable_loggers:
@@ -610,19 +699,19 @@ async def cleanup_server(app):
     redis_cluster = app.get("redis_cluster")
     if redis_cluster:
         print("Scripting server shutdown: Closing redis-cluster connection")
-        futures.append(redis_cluster.close())
+        futures.append(redis_cluster.aclose())
     redis_cluster_reader = app.get("redis_cluster_reader")
     if redis_cluster_reader:
         print("Scripting server shutdown: Closing redis-cluster-reader connection")
-        futures.append(redis_cluster_reader.close())
+        futures.append(redis_cluster_reader.aclose())
     redis_client = app.get("redis_client")
     if redis_client:
         print("Scripting server shutdown: Closing redis connection")
-        futures.append(redis_client.close())
+        futures.append(redis_client.aclose())
     redis_client_reader = app.get("redis_client_reader")
     if redis_client_reader:
         print("Scripting server shutdown: Closing redis-reader connection")
-        futures.append(redis_client_reader.close())
+        futures.append(redis_client_reader.aclose())
     # close boto3 session
     boto3_context_stack = app.get("boto3_context_stack")
     if boto3_context_stack:
@@ -663,7 +752,7 @@ class AccessLogger(AbstractAccessLogger):
 
 parser = argparse.ArgumentParser(description="aiohttp scripting-server")
 parser.add_argument("--path")
-parser.add_argument("--port")
+parser.add_argument("--port", type=int)
 
 if __name__ == "__main__":
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())

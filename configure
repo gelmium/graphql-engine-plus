@@ -2,4 +2,5 @@
 [ -f ".env" ] || cp default.env .env
 [ -f ".make.env" ] || cp default.make.env .make.env
 [ -f "~/.Makefile" ] || touch ~/.Makefile
+[ -f "example/graphql-engine/schema/v1/.hasura-cli.env" ] || cp default.hasura-cli.env example/graphql-engine/schema/v1/.hasura-cli.env
 echo "This script setup all system config/files which required to run the project"

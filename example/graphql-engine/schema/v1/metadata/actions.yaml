@@ -7,13 +7,9 @@ actions:
       headers:
         - name: X-Engine-Plus-Execute-Secret
           value_from_env: ENGINE_PLUS_EXECUTE_SECRET
+        - name: X-Engine-Plus-Execute-File
+          value: quickinsert_to_redis_json.py
       timeout: 60
-      request_transform:
-        body:
-          action: transform
-          template: "{\n  \n  \"execurl\": \"https://gist.githubusercontent.com/0xGosu/d21551c4134341091b3213b9dd63c06e/raw/quickinsert_to_redis_json.py\",\n  \"execfresh\": false,\n  \"params\": {\n    \"STREAM_MAX_LEN\": 1000000\n  },\n  \"payload\": {\n    \"table\": {\n      \"name\": \"customer\",\n      \"schema\": \"public\"\n    },\n    \"input\": {{$body.input}}\n  }\n}"
-        template_engine: Kriti
-        version: 2
     permissions:
       - role: user
 custom_types:

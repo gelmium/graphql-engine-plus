@@ -34,11 +34,28 @@ type JwtAuthParser struct {
 
 func ReadHasuraGraphqlJwtSecretConfig(jwtConfigString string) JwtAuthParser {
 	jwtAuthParserConfig := JwtAuthParser{}
-	json.Unmarshal([]byte(jwtConfigString), &jwtAuthParserConfig)
+	err := json.Unmarshal([]byte(jwtConfigString), &jwtAuthParserConfig)
+	if err != nil {
+		fmt.Println("Failed to parse Hasura Graphql JWT Secret config: ", err)
+	}
 	return jwtAuthParserConfig
 }
 
 type Result struct {
+}
+
+func (jwtAuthParserConfig JwtAuthParser) ParseWithoutVerifyJwt(tokenString string) (jwt.MapClaims, error) {
+	parser := jwt.NewParser()
+	token, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if ok {
+		return claims, nil
+	} else {
+		return nil, err
+	}
 }
 
 func (jwtAuthParserConfig JwtAuthParser) ParseJwt(tokenString string) (jwt.MapClaims, error) {

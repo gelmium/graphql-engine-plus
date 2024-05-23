@@ -1,7 +1,6 @@
 uvloop
 gql[aiohttp]
 redis
-asyncpg
 aioboto3
 msgspec
 opentelemetry-api
