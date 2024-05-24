@@ -13,15 +13,24 @@ async def main(request: web.Request, body):
     # validate the input data
     import msgspec
     from typing import List
-    from lib_types import InsertCustomer
+
+    try:
+        from lib_types import InsertCustomer
+    except ImportError:
+        await request.app["exec_cache"].load_lib("lib_types.py")
+        from lib_types import InsertCustomer
 
     for c in msgspec.convert(body.data.input, type=List[InsertCustomer]):
         if c.id is not None:
             raise msgspec.ValidationError("id must not be specified when insert")
         if c.created_at is not None:
-            raise msgspec.ValidationError("created_at must not be specified when insert")
+            raise msgspec.ValidationError(
+                "created_at must not be specified when insert"
+            )
         if c.updated_at is not None:
-            raise msgspec.ValidationError("updated_at must not be specified when insert")
+            raise msgspec.ValidationError(
+                "updated_at must not be specified when insert"
+            )
         if c.first_name == c.last_name:
             raise msgspec.ValidationError("first_name is the same as last_name")
     # you can do more validation using graphql_client or redis_client

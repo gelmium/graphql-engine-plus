@@ -12,13 +12,21 @@ for file_path in $FOLDER_PATH/*; do
     echo "Skipping directory $file_path"
     continue
   fi
-  echo "Uploading $file_path"
+  
+  # check if if file_path is a file contain the word "lib_" or "_lib"
+  if [[ $file_path == *"lib_"* ]] || [[ $file_path == *"_lib"* ]]; then
+    echo "Uploading lib $file_path"
+    curl -X POST $SCRIPTING_UPLOAD_PATH -F "file=@$file_path" -F "is_library=true" -H "X-Engine-Plus-Execute-Secret: $ENGINE_PLUS_EXECUTE_SECRET"
+    echo " Done!"
+    continue
+  fi
+  echo "Uploading script $file_path"
   curl -X POST $SCRIPTING_UPLOAD_PATH -F "file=@$file_path" -H "X-Engine-Plus-Execute-Secret: $ENGINE_PLUS_EXECUTE_SECRET"
-  echo " Complete!"
+  echo " Done!"
 done
 
 for file_path in $FOLDER_PATH/validate/*; do
   echo "Uploading $file_path"
   curl -X POST $SCRIPTING_UPLOAD_PATH -F "file=@$file_path" -F "path=validate" -H "X-Engine-Plus-Execute-Secret: $ENGINE_PLUS_EXECUTE_SECRET"
-  echo " Complete!"
+  echo " Done!"
 done

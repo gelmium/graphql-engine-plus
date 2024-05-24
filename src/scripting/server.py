@@ -35,6 +35,8 @@ async_tasks = []
 exec_cache = InternalExecCache()
 # constants
 BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
+# make sure the scripts path exists
+os.makedirs(BASE_SCRIPTS_PATH, exist_ok=True)
 # add the scripts path to sys.path
 sys.path.append(BASE_SCRIPTS_PATH)
 # environment variables
@@ -445,6 +447,7 @@ async def upload_script_handler(request: web.Request):
         # read file content from request body
         data = await request.post()
         upload_path = data.get("path", "")
+        is_library = data.get("is_library")
         upload_file_list = data.getall("file")
         if len(upload_file_list) == 0:
             return web.Response(
@@ -462,33 +465,40 @@ async def upload_script_handler(request: web.Request):
                 continue
             exec_content = script_file.file.read().decode("utf-8")
             try:
-                async with start_as_current_span_async(
-                    "validate-script",
-                    kind=trace.SpanKind.INTERNAL,
-                    attributes={
-                        "script_file.filename": script_file.filename,
-                    },
-                ):
-                    exec_main_func = exec_and_verify_script(exec_content)
+                if not is_library:
+                    async with start_as_current_span_async(
+                        "validate-script",
+                        kind=trace.SpanKind.INTERNAL,
+                        attributes={
+                            "script_file.filename": script_file.filename,
+                        },
+                    ):
+                        exec_main_func = exec_and_verify_script(exec_content)
+                else:  # the script is a library, hence we can set the exec_main_func to None
+                    exec_main_func = None
                 async with start_as_current_span_async(
                     "save-script",
                     kind=trace.SpanKind.INTERNAL,
                     attributes={
+                        "upload_path": upload_path,
+                        "is_library": bool(is_library),
                         "script_file.filename": script_file.filename,
                     },
                 ):
                     # the script is seem to be a valid python script
                     # we can save it to cache and file system
-                    if len(upload_path):
+                    if is_library:
+                        exec_cache_key = f"lib:{script_file.filename}"
+                    elif len(upload_path):
                         exec_cache_key = (
                             f"exec:{os.path.join(upload_path,script_file.filename)}"
                         )
                     else:
                         exec_cache_key = f"exec:{script_file.filename}"
                     exec_cache.pop(exec_cache_key, None)
-                    await exec_cache.set(
-                        exec_cache_key, exec_main_func, exec_content
-                    )
+                    # if the script is a library, exec_main_func will be None
+                    # while the exec_content will be saved correctly
+                    await exec_cache.set(exec_cache_key, exec_main_func, exec_content)
                     # also write the script to local file system
                     if len(upload_path):
                         # we need to create the folder if not exists
@@ -613,6 +623,7 @@ async def get_app():
     app["graphql_client"] = GqlAsyncClient(tracer)
     app["json_encoder"] = json_encoder
     app["json_decoder"] = json_decoder
+    app["exec_cache"] = exec_cache
 
     # init boto3 session if enabled, this allow faster boto3 connection in scripts
     if ENGINE_PLUS_ENABLE_BOTO3:
