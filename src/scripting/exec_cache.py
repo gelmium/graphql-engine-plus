@@ -85,20 +85,17 @@ class InternalExecCache(dict):
         # save the content length
         self.content_length[key] = len(exec_content)
 
-    async def load_lib(self, lib_file_name, path=None, key_prefix="lib:"):
+    async def load_lib(self, lib_file_path, key_prefix="lib:"):
         """Load lib from redis"""
         if not hasattr(self, "redis"):
             raise ValueError("Redis instance is required for load_lib feature")
-        key = f"{key_prefix}{lib_file_name}"
+        key = f"{key_prefix}{lib_file_path}"
         lib_content = await self.redis.get(key)
         if lib_content is None:
             raise ValueError(f"Key {key} not found in redis")
         logger.info(f"Load {key} from redis")
         # write lib content to file
         BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
-        if path:
-            save_to = os.path.join(BASE_SCRIPTS_PATH, path, lib_file_name)
-        else:
-            save_to = os.path.join(BASE_SCRIPTS_PATH, lib_file_name)
+        save_to = os.path.join(BASE_SCRIPTS_PATH, lib_file_path)
         with open(save_to, "w") as f:
             f.write(lib_content.decode("utf-8"))
