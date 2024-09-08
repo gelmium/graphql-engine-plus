@@ -82,6 +82,8 @@ F := test-script.py
 P := test
 upload-script:
 	@set -o allexport; source .env; set +o allexport;curl -X POST $$SCRIPTING_UPLOAD_PATH -F "file=@$(F)" -F "path=$(P)" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
+upload-lib:
+	@set -o allexport; source .env; set +o allexport;curl -X POST $$SCRIPTING_UPLOAD_PATH -F "file=@$(F)" -F "path=$(P)" -F "is_library=true" -H "X-Engine-Plus-Execute-Secret: $$ENGINE_PLUS_EXECUTE_SECRET"
 deploy-script:
 	@set -o allexport; source .env; set +o allexport;bash scripts/deploy_scripts.sh
 

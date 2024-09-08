@@ -26,15 +26,13 @@ from opentelemetry import propagate
 from opentelemetry.propagators.textmap import Getter
 from opentelemetry.instrumentation.aiohttp_client import create_trace_config
 import socket
-from exec_cache import InternalExecCache
+from exec_cache import InternalExecCache, BASE_SCRIPTS_PATH
 
 # global variable to keep track of async tasks
 # this also prevent the tasks from being garbage collected
 async_tasks = []
 # global variable to cache the loaded execfile/execurl functions
 exec_cache = InternalExecCache()
-# constants
-BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
 # make sure the scripts path exists
 os.makedirs(BASE_SCRIPTS_PATH, exist_ok=True)
 # add the scripts path to sys.path
@@ -488,7 +486,12 @@ async def upload_script_handler(request: web.Request):
                     # the script is seem to be a valid python script
                     # we can save it to cache and file system
                     if len(upload_path):
-                        file_path = os.path.join(upload_path, script_file.filename)
+                        if upload_path.endswith(script_file.filename):
+                            # fix the upload path if it contain file name
+                            file_path = upload_path
+                            upload_path = file_path.rsplit("/", 1)[0]
+                        else:
+                            file_path = os.path.join(upload_path, script_file.filename)
                     else:
                         file_path = script_file.filename
                     if is_library:

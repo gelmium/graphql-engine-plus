@@ -14,13 +14,13 @@ async def main(request: web.Request, body):
     import msgspec
     from typing import List
 
-    try:
-        from lib_types import InsertCustomer
-    except ImportError:
-        await request.app["exec_cache"].load_lib("lib_types.py")
-        from lib_types import InsertCustomer
+    should_reload = await request.app["exec_cache"].load_lib("libs/lib_types.py")
+    from libs import lib_types
+    if should_reload:
+        from importlib import reload
+        reload(lib_types)
 
-    for c in msgspec.convert(body.data.input, type=List[InsertCustomer]):
+    for c in msgspec.convert(body.data.input, type=List[lib_types.InsertCustomer]):
         if c.id is not None:
             raise msgspec.ValidationError("id must not be specified when insert")
         if c.created_at is not None:
