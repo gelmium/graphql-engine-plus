@@ -4,6 +4,8 @@ import logging
 import os
 
 logger = logging.getLogger("scripting-exec-cache")
+# constants, TODO: move to constants.py
+BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
 
 
 class InternalExecCache(dict):
@@ -85,20 +87,35 @@ class InternalExecCache(dict):
         # save the content length
         self.content_length[key] = len(exec_content)
 
-    async def load_lib(self, lib_file_name, path=None, key_prefix="lib:"):
-        """Load lib from redis"""
+    async def load_lib(self, lib_file_path, key_prefix="lib:"):
+        """Load lib from redis, return True if lib content is changed
+        if the lib is first time loaded, this function will return False
+        """
         if not hasattr(self, "redis"):
             raise ValueError("Redis instance is required for load_lib feature")
-        key = f"{key_prefix}{lib_file_name}"
+        save_to = os.path.join(BASE_SCRIPTS_PATH, lib_file_path)
+        key = f"{key_prefix}{lib_file_path}"
         lib_content = await self.redis.get(key)
         if lib_content is None:
-            raise ValueError(f"Key {key} not found in redis")
+            # check if the lib file exists
+            if not os.path.exists(save_to):
+                raise ValueError(f"Key {key} not found in redis")
+            else:
+                # silently ignore the error, if the lib file exists
+                # update lib content length dict with file length
+                self.content_length[key] = os.path.getsize(save_to)
+                # simply return False
+                return False
         logger.info(f"Load {key} from redis")
-        # write lib content to file
-        BASE_SCRIPTS_PATH = "/graphql-engine/scripts"
-        if path:
-            save_to = os.path.join(BASE_SCRIPTS_PATH, path, lib_file_name)
-        else:
-            save_to = os.path.join(BASE_SCRIPTS_PATH, lib_file_name)
-        with open(save_to, "w") as f:
-            f.write(lib_content.decode("utf-8"))
+        # compare lib content
+        is_changed = False
+        if self.content_length.get(key) != len(lib_content):
+            # write lib content to file if first time loaded or changed
+            with open(save_to, "w") as f:
+                f.write(lib_content.decode("utf-8"))
+            if self.content_length.get(key) is not None:
+                logger.info(f"Lib {lib_file_path} content is changed")
+                is_changed = True
+        # update lib content length dict
+        self.content_length[key] = len(lib_content)
+        return is_changed
