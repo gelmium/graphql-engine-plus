@@ -15,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/proxy"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/spf13/viper"
 	"github.com/valyala/fasthttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -115,6 +116,9 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			Prefork:      false, // Prefork mode can't be enabled with sub process program running, also it doesn't give any performance boost if concurent request is low
 		},
 	)
+	var rwPath = viper.GetString("rwPath")
+	var roPath = viper.GetString("roPath")
+	var scriptingPublicPath = StripTrailingSlash(viper.GetString("scriptingPublicPath"))
 
 	// set logger middleware
 	if debugMode {
@@ -387,7 +391,7 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 
 func main() {
 	// Init config
-	InitConfig()
+	InitViperConfig()
 	// These context are for startup only
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
@@ -402,16 +406,12 @@ func main() {
 	// setup app
 	app := setupFiber(startupCtx, startupReadonlyCtx, redisCacheClient)
 
-	if engineServerPort == "" {
-		engineServerPort = "8000"
-	}
-
 	// start the http server in coroutine and handler error
 	// if the server failed to start
 	// we dont need to wait for the server to start
 	// as we will wait for the startup to be completed
 	go func() {
-		err := app.Listen(engineServerHost + ":" + engineServerPort)
+		err := app.Listen(viper.GetString("engineServerHost") + ":" + viper.GetString("engineServerPort"))
 		if err != nil {
 			// trigger graceful shutdown
 			mainCtxCancelFn()

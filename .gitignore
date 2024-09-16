@@ -14,5 +14,13 @@ test-script*.py
 *.py[cod]
 __pycache__/
 # add ignore rules for golang
+go.work
+go.work.sum
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
 *.o
+*.out

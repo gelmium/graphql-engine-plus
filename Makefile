@@ -37,7 +37,7 @@ hasura-migrate-create-migration-from-server-example-v1:
 	hasura migrate create "CHANGE-ME" --from-server --database-name default --schema public --project $(PROJECT) --envfile .hasura-cli.env
 
 run-migrate-hasura:
-	docker compose run graphql-engine /root/migrate_hasura.sh
+	docker compose run graphql-engine /bin/migrate
 N := 1000
 run-graphql-benchmark:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
