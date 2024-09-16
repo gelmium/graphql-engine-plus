@@ -3,34 +3,9 @@ package main
 import (
 	"os"
 	"strconv"
+
+	"github.com/spf13/viper"
 )
-
-// The server Host name to listen on
-// default to empty string (equivalent to 0.0.0.0) if the env is not set
-var engineServerHost = os.Getenv("ENGINE_PLUS_SERVER_HOST")
-
-// The server port to listen on
-// default to 8000 if the env is not set
-var engineServerPort = os.Getenv("ENGINE_PLUS_SERVER_PORT")
-
-// The API PATH for the read-write queries
-// default to /public/graphql/v1 if the env is not set
-var rwPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_PATH")
-
-// The API PATH for the readonly queries
-// default to /public/graphql/v1readonly if the env is not set
-// request send to this path will be routed between primary and replica
-var roPath = os.Getenv("ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
-
-// The API PATH for the scripting engine
-// If not set, no public endpoint will be exposed to send request to scripting engine
-// scripting engine can still be used in hasura metadata by using the local endpoint
-// at http://localhost:8880/execute
-// or at http://localhost:8880/validate
-// For ex, If set engineMetaPath = "/scripting", the following endpoint will be exposed:
-// POST /scripting/upload -> /upload : This endpoint allow upload scripts to the scripting engine
-// POST /scripting/execute -> /execute : This endpoint allow to execute a script using scripting engine
-var scriptingPublicPath = os.Getenv("ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
 
 // The secret key to authenticate the request to the scripting engine
 // Must be set if the scriptingPublicPath is set
@@ -141,55 +116,114 @@ var hasuraGqlRedisClusterUrl = os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
 // Set this value to 0 will disable query caching
 var hasuraGqlCacheMaxEntryTtl, hasuraGqlCacheMaxEntryTtlParseErr = strconv.ParseUint(os.Getenv("HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL"), 10, 64)
 
-func InitConfig() {
-	// Init default value for API PATH defined in the environment variable
-	if rwPath == "" {
-		rwPath = "/public/graphql/v1"
-	}
-	if roPath == "" {
-		roPath = "/public/graphql/v1readonly"
-	}
-	if healthCheckPath == "" {
-		healthCheckPath = "/public/graphql/health"
-	}
-	if engineMetaPath == "" {
-		engineMetaPath = "/public/meta"
-	} else if engineMetaPath[len(engineMetaPath)-1:] == "/" {
+func InitViperConfig() {
+	// binding environment variables to viper
+
+	// The server Host name to listen on
+	// default to empty string (equivalent to 0.0.0.0) if the env is not set
+	_ = viper.BindEnv("engineServerHost", "ENGINE_PLUS_SERVER_HOST")
+	viper.SetDefault("engineServerHost", "")
+
+	// The server port to listen on
+	// default to 8000 if the env is not set
+	_ = viper.BindEnv("engineServerPort", "ENGINE_PLUS_SERVER_PORT")
+	viper.SetDefault("engineServerPort", "8000")
+
+	// The API PATH for the read-write queries
+	// default to /public/graphql/v1 if the env is not set
+	_ = viper.BindEnv("rwPath", "ENGINE_PLUS_GRAPHQL_V1_PATH")
+	viper.SetDefault("rwPath", "/public/graphql/v1")
+
+	// The API PATH for the readonly queries
+	// default to /public/graphql/v1readonly if the env is not set
+	// request send to this path will be routed between primary and replica
+	_ = viper.BindEnv("roPath", "ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
+	viper.SetDefault("roPath", "/public/graphql/v1readonly")
+
+	// The API PATH for the scripting engine
+	// If not set, no public endpoint will be exposed to send request to scripting engine
+	// scripting engine can still be used in hasura metadata by using the local endpoint
+	// at http://localhost:8880/execute
+	// or at http://localhost:8880/validate
+	// For ex, If set engineMetaPath = "/scripting", the following endpoint will be exposed:
+	// POST /scripting/upload -> /upload : This endpoint allow upload scripts to the scripting engine
+	// POST /scripting/execute -> /execute : This endpoint allow to execute a script using scripting engine
+	_ = viper.BindEnv("scriptingPublicPath", "ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
+
+	_ = viper.BindEnv("envExecuteSecret", "ENGINE_PLUS_EXECUTE_SECRET")
+	_ = viper.BindEnv("allowExecuteUrl", "ENGINE_PLUS_ALLOW_EXECURL")
+	_ = viper.BindEnv("healthCheckPath", "ENGINE_PLUS_HEALTH_CHECK_PATH")
+	_ = viper.BindEnv("engineMetaPath", "ENGINE_PLUS_META_PATH")
+	_ = viper.BindEnv("engineGqlPvRweight", "ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT")
+	_ = viper.BindEnv("engineEnableOtelType", "ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
+	_ = viper.BindEnv("debugMode", "DEBUG")
+	_ = viper.BindEnv("groupcacheServerPort", "ENGINE_PLUS_GROUPCACHE_PORT")
+	_ = viper.BindEnv("engineGroupcacheClusterMode", "ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE")
+	_ = viper.BindEnv("engineGroupcacheWaitEta", "ENGINE_PLUS_GROUPCACHE_WAIT_ETA")
+	_ = viper.BindEnv("engineGroupcacheMaxSize", "ENGINE_PLUS_GROUPCACHE_MAX_SIZE")
+	_ = viper.BindEnv("hasuraGqlCorsDomain", "HASURA_GRAPHQL_CORS_DOMAIN")
+	_ = viper.BindEnv("hasuraGqlReadReplicaUrls", "HASURA_GRAPHQL_READ_REPLICA_URLS")
+	_ = viper.BindEnv("hasuraGqlDatabaseUrl", "HASURA_GRAPHQL_DATABASE_URL")
+	_ = viper.BindEnv("hasuraGqlMetadataDatabaseUrl", "HASURA_GRAPHQL_METADATA_DATABASE_URL")
+	_ = viper.BindEnv("hasuraGqlJwtSecret", "HASURA_GRAPHQL_JWT_SECRET")
+	_ = viper.BindEnv("hasuraGqlRedisUrl", "HASURA_GRAPHQL_REDIS_URL")
+	_ = viper.BindEnv("hasuraGqlRedisReaderUrl", "HASURA_GRAPHQL_REDIS_READER_URL")
+	_ = viper.BindEnv("hasuraGqlRedisClusterUrl", "HASURA_GRAPHQL_REDIS_CLUSTER_URL")
+	_ = viper.BindEnv("hasuraGqlCacheMaxEntryTtl", "HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL")
+	// set default value for some env
+
+	viper.SetDefault("healthCheckPath", "/public/graphql/health")
+	viper.SetDefault("engineMetaPath", "/public/meta")
+	viper.SetDefault("hasuraGqlCorsDomain", "*")
+	viper.SetDefault("hasuraGqlCacheMaxEntryTtl", 3600)
+	viper.SetDefault("engineGqlPvRweight", 50)
+	viper.SetDefault("engineEnableOtelType", "")
+	viper.SetDefault("debugMode", false)
+	viper.SetDefault("groupcacheServerPort", "8879")
+	viper.SetDefault("engineGroupcacheClusterMode", "")
+	viper.SetDefault("engineGroupcacheWaitEta", 500)
+	viper.SetDefault("engineGroupcacheMaxSize", 60000000)
+
+	// read env (TODO: replace all useage of below variable with viper.Get)
+
+	envExecuteSecret = viper.GetString("envExecuteSecret")
+	allowExecuteUrl = viper.GetBool("allowExecuteUrl")
+	healthCheckPath = viper.GetString("healthCheckPath")
+	engineMetaPath = viper.GetString("engineMetaPath")
+	engineGqlPvRweight = viper.GetUint64("engineGqlPvRweight")
+	engineEnableOtelType = viper.GetString("engineEnableOtelType")
+	debugMode = viper.GetBool("debugMode")
+	groupcacheServerPort = viper.GetString("groupcacheServerPort")
+	engineGroupcacheClusterMode = viper.GetString("engineGroupcacheClusterMode")
+	engineGroupcacheWaitEta = viper.GetUint64("engineGroupcacheWaitEta")
+	engineGroupcacheMaxSize = viper.GetUint64("engineGroupcacheMaxSize")
+	hasuraGqlCorsDomain = viper.GetString("hasuraGqlCorsDomain")
+	hasuraGqlReadReplicaUrls = viper.GetString("hasuraGqlReadReplicaUrls")
+	hasuraGqlDatabaseUrl = viper.GetString("hasuraGqlDatabaseUrl")
+	hasuraGqlMetadataDatabaseUrl = viper.GetString("hasuraGqlMetadataDatabaseUrl")
+	hasuraGqlJwtSecret = viper.GetString("hasuraGqlJwtSecret")
+	hasuraGqlRedisUrl = viper.GetString("hasuraGqlRedisUrl")
+	hasuraGqlRedisReaderUrl = viper.GetString("hasuraGqlRedisReaderUrl")
+	hasuraGqlRedisClusterUrl = viper.GetString("hasuraGqlRedisClusterUrl")
+	hasuraGqlCacheMaxEntryTtl = viper.GetUint64("hasuraGqlCacheMaxEntryTtl")
+
+	// additional fix
+	if engineMetaPath[len(engineMetaPath)-1:] == "/" {
 		// check if metadataPath end with /
 		// if yes, remove / from the end of metadataPath.
 		engineMetaPath = engineMetaPath[:len(engineMetaPath)-1]
 	}
-	// all path must not end with "/"
-	if scriptingPublicPath[len(scriptingPublicPath)-1:] == "/" {
-		// check if scriptingPublicPath end with /
-		// if yes, remove / from the end of metadataPath.
-		scriptingPublicPath = scriptingPublicPath[:len(scriptingPublicPath)-1]
-	}
 
-	// Init default value for CORS domain
-	if hasuraGqlCorsDomain == "" {
-		hasuraGqlCorsDomain = "*"
+	// limit the max value to 3000, this allow the group wait to loop for ~500-600 times
+	// each loop will sleep for 5 miliseconds before check the redis cache again
+	if engineGroupcacheWaitEta > 3000 {
+		engineGroupcacheWaitEta = 3000
 	}
-	// Init default value for primary vs replica weight routing
-	if engineGqlPvRweightParseErr != nil {
-		engineGqlPvRweight = 50
+}
+
+func StripTrailingSlash(path string) string {
+	if path[len(path)-1:] == "/" {
+		return path[:len(path)-1]
 	}
-	// Init default value for graphql query caching max TTL
-	if hasuraGqlCacheMaxEntryTtlParseErr != nil {
-		hasuraGqlCacheMaxEntryTtl = 3600
-	}
-	// Init default value for groupcache waitETA
-	if engineGroupcacheWaitEtaParseErr != nil {
-		engineGroupcacheWaitEta = 500
-	} else {
-		// limit the max value to 3000, this allow the group wait to loop for ~500-600 times
-		// each loop will sleep for 5 miliseconds before check the redis cache again
-		if engineGroupcacheWaitEta > 3000 {
-			engineGroupcacheWaitEta = 3000
-		}
-	}
-	// Init default value for groupcache cacheMaxSize
-	if engineGroupcacheMaxSizeParseErr != nil {
-		engineGroupcacheMaxSize = 60000000
-	}
+	return path
 }
