@@ -3,6 +3,7 @@
 SHELL := /bin/bash
 # include default shell env for Makefile
 include .make.env
+LOCAL_DOCKER_IMG_REPO := graphql-engine-plus
 # export all variable to sub Makefile as well
 export
 
@@ -50,7 +51,7 @@ dynamodb-show-all-item:
 
 build: $(shell find src -type f)  ## compile and build project
 	# run a test build
-	go build -o ./build/server ./src
+	cd ./src; go build -o ./build/server .
 	mkdir -p build && touch build
 
 

@@ -116,9 +116,9 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			Prefork:      false, // Prefork mode can't be enabled with sub process program running, also it doesn't give any performance boost if concurent request is low
 		},
 	)
-	var rwPath = viper.GetString("rwPath")
-	var roPath = viper.GetString("roPath")
-	var scriptingPublicPath = StripTrailingSlash(viper.GetString("scriptingPublicPath"))
+	var rwPath = viper.GetString(ENGINE_PLUS_GRAPHQL_V1_PATH)
+	var roPath = viper.GetString(ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH)
+	var scriptingPublicPath = StripTrailingSlash(viper.GetString(ENGINE_PLUS_SCRIPTING_PUBLIC_PATH))
 
 	// set logger middleware
 	if debugMode {
@@ -136,7 +136,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		// skip health check endpoints
 		Next: func(c *fiber.Ctx) bool {
 			// Next defines a function to skip this middleware when returned true.
-			if c.Path() == healthCheckPath || c.Path() == "/health" {
+			if c.Path() == viper.GetString(ENGINE_PLUS_HEALTH_CHECK_PATH) || c.Path() == "/health" {
 				return true
 			}
 			return false
@@ -168,7 +168,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 		})))
 	}
 
-	app.Get(healthCheckPath, func(c *fiber.Ctx) error {
+	app.Get(viper.GetString(ENGINE_PLUS_HEALTH_CHECK_PATH), func(c *fiber.Ctx) error {
 		// check for startupCtx to be done
 		if startupCtx.Err() == nil {
 			log.Warn("Startup has not yet completed, return health check not OK")
@@ -275,12 +275,12 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			// validate the engine plus execute secret
 			headerExecuteSecret := c.Get("X-Engine-Plus-Execute-Secret")
 			// if header is empty or not equal to the env, return 401
-			if headerExecuteSecret == "" || headerExecuteSecret != envExecuteSecret {
+			if headerExecuteSecret == "" || headerExecuteSecret != viper.GetString(ENGINE_PLUS_EXECUTE_SECRET) {
 				return fiber.NewError(fiber.StatusUnauthorized, "Unauthorized")
 			}
-			// check if the header X-Engine-Plus-Execute-Url is present
-			// when allowExecuteUrl is false, if yes return 403
-			if !allowExecuteUrl && c.Get("X-Engine-Plus-Execute-Url") != "" {
+			// do not allow request with header X-Engine-Plus-Execute-Url
+			// when ENGINE_PLUS_ALLOW_EXECURL is false (return 403)
+			if !viper.GetBool(ENGINE_PLUS_ALLOW_EXECURL) && c.Get("X-Engine-Plus-Execute-Url") != "" {
 				return fiber.NewError(fiber.StatusForbidden, "Forbidden")
 			}
 			// check and wait for startupCtx to be done
@@ -390,8 +390,10 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 }
 
 func main() {
-	// Init config
-	InitViperConfig()
+	// Setup viper
+	SetupViper()
+	// Init config with default values
+	InitConfig()
 	// These context are for startup only
 	mainCtx, mainCtxCancelFn := context.WithCancel(context.Background())
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
