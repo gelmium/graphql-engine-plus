@@ -7,17 +7,36 @@ import (
 	"github.com/spf13/viper"
 )
 
+// The API PATH for the read-write queries
+// default to /public/graphql/v1 if the env is not set
+const ENGINE_PLUS_GRAPHQL_V1_PATH = "ENGINE_PLUS_GRAPHQL_V1_PATH"
+
+// The API PATH for the readonly queries
+// default to /public/graphql/v1readonly if the env is not set
+// request send to this path will be routed between primary and replica
+const ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH = "ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH"
+
 // The secret key to authenticate the request to the scripting engine
 // Must be set if the scriptingPublicPath is set
-var envExecuteSecret = os.Getenv("ENGINE_PLUS_EXECUTE_SECRET")
+const ENGINE_PLUS_EXECUTE_SECRET = "ENGINE_PLUS_EXECUTE_SECRET"
+
+// The API PATH for the scripting engine
+// If not set, no public endpoint will be exposed to send request to scripting engine
+// scripting engine can still be used in hasura metadata by using the local endpoint
+// at http://localhost:8880/execute
+// or at http://localhost:8880/validate
+// For ex, If set ENGINE_PLUS_SCRIPTING_PUBLIC_PATH = "/scripting", the following endpoint will be exposed:
+// POST /scripting/upload -> /upload : This endpoint allow upload scripts to the scripting engine
+// POST /scripting/execute -> /execute : This endpoint allow to execute a script using scripting engine
+const ENGINE_PLUS_SCRIPTING_PUBLIC_PATH = "ENGINE_PLUS_SCRIPTING_PUBLIC_PATH"
 
 // Set to true to enable execute from url for the scripting engine
-var allowExecuteUrl, _ = strconv.ParseBool(os.Getenv("ENGINE_PLUS_ALLOW_EXECURL"))
+const ENGINE_PLUS_ALLOW_EXECURL = "ENGINE_PLUS_ALLOW_EXECURL"
 
 // The API PATH for the health check endpoint. This endpoint will do health checks
 // of all dependent services, ex: Hasura graphql-engine, Python scripting-engine, etc.
 // default to /public/graphql/health if the env is not set
-var healthCheckPath = os.Getenv("ENGINE_PLUS_HEALTH_CHECK_PATH")
+const ENGINE_PLUS_HEALTH_CHECK_PATH = "ENGINE_PLUS_HEALTH_CHECK_PATH"
 
 // The API PATH to enable schema migrations, console, etc.
 // default to /public/meta if the env is not set
@@ -116,8 +135,12 @@ var hasuraGqlRedisClusterUrl = os.Getenv("HASURA_GRAPHQL_REDIS_CLUSTER_URL")
 // Set this value to 0 will disable query caching
 var hasuraGqlCacheMaxEntryTtl, hasuraGqlCacheMaxEntryTtlParseErr = strconv.ParseUint(os.Getenv("HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL"), 10, 64)
 
-func InitViperConfig() {
-	// binding environment variables to viper
+func SetupViper() {
+	// setup automatic environment variable binding
+	viper.AutomaticEnv()
+}
+func InitConfig() {
+	// set default value for viper config
 
 	// The server Host name to listen on
 	// default to empty string (equivalent to 0.0.0.0) if the env is not set
@@ -129,30 +152,10 @@ func InitViperConfig() {
 	_ = viper.BindEnv("engineServerPort", "ENGINE_PLUS_SERVER_PORT")
 	viper.SetDefault("engineServerPort", "8000")
 
-	// The API PATH for the read-write queries
-	// default to /public/graphql/v1 if the env is not set
-	_ = viper.BindEnv("rwPath", "ENGINE_PLUS_GRAPHQL_V1_PATH")
-	viper.SetDefault("rwPath", "/public/graphql/v1")
+	viper.SetDefault(ENGINE_PLUS_GRAPHQL_V1_PATH, "/public/graphql/v1")
 
-	// The API PATH for the readonly queries
-	// default to /public/graphql/v1readonly if the env is not set
-	// request send to this path will be routed between primary and replica
-	_ = viper.BindEnv("roPath", "ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH")
-	viper.SetDefault("roPath", "/public/graphql/v1readonly")
+	viper.SetDefault(ENGINE_PLUS_GRAPHQL_V1_READONLY_PATH, "/public/graphql/v1readonly")
 
-	// The API PATH for the scripting engine
-	// If not set, no public endpoint will be exposed to send request to scripting engine
-	// scripting engine can still be used in hasura metadata by using the local endpoint
-	// at http://localhost:8880/execute
-	// or at http://localhost:8880/validate
-	// For ex, If set engineMetaPath = "/scripting", the following endpoint will be exposed:
-	// POST /scripting/upload -> /upload : This endpoint allow upload scripts to the scripting engine
-	// POST /scripting/execute -> /execute : This endpoint allow to execute a script using scripting engine
-	_ = viper.BindEnv("scriptingPublicPath", "ENGINE_PLUS_SCRIPTING_PUBLIC_PATH")
-
-	_ = viper.BindEnv("envExecuteSecret", "ENGINE_PLUS_EXECUTE_SECRET")
-	_ = viper.BindEnv("allowExecuteUrl", "ENGINE_PLUS_ALLOW_EXECURL")
-	_ = viper.BindEnv("healthCheckPath", "ENGINE_PLUS_HEALTH_CHECK_PATH")
 	_ = viper.BindEnv("engineMetaPath", "ENGINE_PLUS_META_PATH")
 	_ = viper.BindEnv("engineGqlPvRweight", "ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT")
 	_ = viper.BindEnv("engineEnableOtelType", "ENGINE_PLUS_ENABLE_OPEN_TELEMETRY")
@@ -172,7 +175,7 @@ func InitViperConfig() {
 	_ = viper.BindEnv("hasuraGqlCacheMaxEntryTtl", "HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL")
 	// set default value for some env
 
-	viper.SetDefault("healthCheckPath", "/public/graphql/health")
+	viper.SetDefault(ENGINE_PLUS_HEALTH_CHECK_PATH, "/public/graphql/health")
 	viper.SetDefault("engineMetaPath", "/public/meta")
 	viper.SetDefault("hasuraGqlCorsDomain", "*")
 	viper.SetDefault("hasuraGqlCacheMaxEntryTtl", 3600)
@@ -186,9 +189,6 @@ func InitViperConfig() {
 
 	// read env (TODO: replace all useage of below variable with viper.Get)
 
-	envExecuteSecret = viper.GetString("envExecuteSecret")
-	allowExecuteUrl = viper.GetBool("allowExecuteUrl")
-	healthCheckPath = viper.GetString("healthCheckPath")
 	engineMetaPath = viper.GetString("engineMetaPath")
 	engineGqlPvRweight = viper.GetUint64("engineGqlPvRweight")
 	engineEnableOtelType = viper.GetString("engineEnableOtelType")
