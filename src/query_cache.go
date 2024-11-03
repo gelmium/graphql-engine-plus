@@ -12,6 +12,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
+	"github.com/spf13/viper"
 	"github.com/valyala/fasthttp"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -115,7 +116,7 @@ func ReadResponseBodyAndSaveToCache(ctx context.Context, resp *fasthttp.Response
 	resp.Header.Set("Cache-Control", "max-age="+strconv.Itoa(ttl))
 }
 
-var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(hasuraGqlJwtSecret)
+var jwtAuthParserConfig = ReadHasuraGraphqlJwtSecretConfig(viper.GetString(HASURA_GRAPHQL_JWT_SECRET))
 
 // TODO: allow this Regex to be configurable via environment variable
 var notCacheHeaderRegex = regexp.MustCompile(`(?i)^(Host|Connection|X-Forwarded-For|X-Request-ID|User-Agent|Content-Length|Content-Type|X-Envoy-External-Address|X-Envoy-Expected-Rq-Timeout-Ms)$`)

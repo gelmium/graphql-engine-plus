@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/spf13/viper"
 )
 
 type GraphQLRequest struct {
@@ -46,7 +47,7 @@ func (req *GraphQLRequest) IsSubscriptionGraphQLRequest() bool {
 // return ttl (seconds) if the query is a cached query with ttl.
 func (req *GraphQLRequest) IsCachedQueryGraphQLRequest() int {
 	// According to Hasura default max ttl is 3600 seconds
-	maxTTL := int(hasuraGqlCacheMaxEntryTtl)
+	maxTTL := viper.GetInt(HASURA_GRAPHQL_CACHE_MAX_ENTRY_TTL)
 	// check if the query is a subscription with regex
 	if cachedQueryRegex.MatchString(req.Query) {
 		match := cachedParamsRegex.FindStringSubmatch(req.Query)
