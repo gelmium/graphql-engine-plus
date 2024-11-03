@@ -1,0 +1,42 @@
+name: build-push-devcontainer
+
+on:
+  push:
+    branches:
+      - "main"
+jobs:
+  docker-build-push:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v3
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      -
+        name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Build and push to GitHub Container Registry
+        uses: docker/build-push-action@v6
+        with:
+          context: src/
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags:  |
+            gelmium/graphql-engine-plus:latest
+            gelmium/graphql-engine-plus:v2.44.0
+          build-args:  |
+            HASURA_GRAPHQL_ENGINE_VERSION=v2.44.0
+          target: server
+          cache-from: type=registry,ref=gelmium/graphql-engine-plus:buildcache
+          cache-to: type=registry,ref=gelmium/graphql-engine-plus:buildcache,mode=max
+
+      

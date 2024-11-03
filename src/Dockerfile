@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
     --mount=type=bind,target=. \
     go build -o /bin/server .
 
-FROM hasura/graphql-engine:${HASURA_GRAPHQL_ENGINE_VERSION:-v2.38.1} AS server
+FROM hasura/graphql-engine:${HASURA_GRAPHQL_ENGINE_VERSION:-v2.44.0} AS server
 WORKDIR /graphql-engine
 
 # install python and pip
@@ -29,7 +29,7 @@ ADD ./scripting/requirements.txt /graphql-engine/scripting/requirements.txt
 RUN pip3 install -r /graphql-engine/scripting/requirements.txt \
     && rm -rf /tmp/* /var/tmp/* /root/.cache/pip/*
 # install hasura cli
-RUN curl -L https://github.com/hasura/graphql-engine/raw/stable/cli/get.sh | VERSION=${HASURA_GRAPHQL_ENGINE_VERSION:-v2.38.1} bash
+RUN curl -L https://github.com/hasura/graphql-engine/raw/stable/cli/get.sh | VERSION=${HASURA_GRAPHQL_ENGINE_VERSION:-v2.42.0} bash
 # Add scripting-server and migrate scripts 
 COPY ./scripting /graphql-engine/scripting
 ADD ./bin/migrate_hasura.sh /bin/migrate
