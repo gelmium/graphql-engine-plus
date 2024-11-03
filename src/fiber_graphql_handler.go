@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
+	"github.com/spf13/viper"
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -64,7 +65,8 @@ func graphqlQueryHandlerFactory(startupReadonlyCtx context.Context, redisCacheCl
 		// random an int from 0 to 99
 		// if randomInt is less than primaryWeight, send request to primary upstream
 		// if replica is not available, always send request to primary upstream
-		if hasuraGqlReadReplicaUrls == "" || startupReadonlyCtx.Err() == nil || engineGqlPvRweight >= 100 || (engineGqlPvRweight > 0 && rand.Intn(100) < int(engineGqlPvRweight)) {
+		engineGqlPvRweight := int(viper.GetUint(ENGINE_PLUS_GRAPHQL_PRIMARY_VS_REPLICA_WEIGHT))
+		if viper.GetString(HASURA_GRAPHQL_READ_REPLICA_URLS) == "" || startupReadonlyCtx.Err() == nil || engineGqlPvRweight >= 100 || (engineGqlPvRweight > 0 && rand.Intn(100) < engineGqlPvRweight) {
 			// prepare the proxy request to primary upstream
 			prepareProxyRequest(req, "localhost:8881", "/v1/graphql", c.IP())
 			// start tracer span

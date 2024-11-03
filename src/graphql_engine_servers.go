@@ -16,6 +16,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/log"
+	"github.com/spf13/viper"
 )
 
 func StartScannerForBuffer(ctx context.Context, stdoutReader io.Reader) chan string {
@@ -106,10 +107,12 @@ func StartGraphqlEngineServers(
 	cmds = append(cmds, cmd1)
 
 	// start graphql-engine with database point to REPLICA, if the env is set
+	hasuraGqlReadReplicaUrls := viper.GetString(HASURA_GRAPHQL_READ_REPLICA_URLS)
 	if hasuraGqlReadReplicaUrls != "" {
 		// if HASURA_GRAPHQL_METADATA_DATABASE_URL is not specified use HASURA_GRAPHQL_DATABASE_URL
+		hasuraGqlMetadataDatabaseUrl := viper.GetString(HASURA_GRAPHQL_METADATA_DATABASE_URL)
 		if hasuraGqlMetadataDatabaseUrl == "" {
-			hasuraGqlMetadataDatabaseUrl = hasuraGqlDatabaseUrl
+			hasuraGqlMetadataDatabaseUrl = viper.GetString(HASURA_GRAPHQL_DATABASE_URL)
 		}
 		log.Info("Starting graphql-engine read replica at port 8882")
 		cmd2 := exec.CommandContext(ctx, "graphql-engine", "--metadata-database-url", hasuraGqlMetadataDatabaseUrl, "serve", "--server-port", "8882")

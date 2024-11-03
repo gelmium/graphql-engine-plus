@@ -99,7 +99,7 @@ test.graphql-engine-plus.query-cache:
 	@curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE3MTUyNDIyMDAsImV4cCI6MTc0Njc3ODIwMCwiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsImFjY291bnRfaWQiOiIxIiwidG9rZW5fdHlwZSI6InVzZXIifQ.4MDc5lDRW-G05UP9VS2SJoskqG6FIb12u1pVj6jUUts" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1
 	@curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE3MTUyNDIyMDAsImV4cCI6MTc0Njc3ODIwMCwiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsImFjY291bnRfaWQiOiIxIiwidG9rZW5fdHlwZSI6InVzZXIifQ.4MDc5lDRW-G05UP9VS2SJoskqG6FIb12u1pVj6jUUts" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1readonly
 test.graphql-engine-plus.query-gzip:
-	@curl -v -X POST -H "Accept-Encoding: gzip" -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 50) {id}}"}' http://localhost:$(PORT)/public/graphql/v1 --output /tmp/result-query.json.gz
+	@curl -X POST -H "Accept-Encoding: gzip" -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 50) {id}}"}' http://localhost:$(PORT)/public/graphql/v1 --output /tmp/result-query.json.gz
 	@gunzip -c /tmp/result-query.json.gz
 PORT1 := 8001
 PORT2 := 8002

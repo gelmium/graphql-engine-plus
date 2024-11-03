@@ -121,7 +121,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	var scriptingPublicPath = StripTrailingSlash(viper.GetString(ENGINE_PLUS_SCRIPTING_PUBLIC_PATH))
 
 	// set logger middleware
-	if debugMode {
+	if viper.GetBool(DEBUG_MODE) {
 		log.SetLevel(log.LevelDebug)
 		handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
 		slog.SetDefault(slog.New(handler))
@@ -145,7 +145,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 
 	// CORS middleware
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: hasuraGqlCorsDomain,
+		AllowOrigins: viper.GetString(HASURA_GRAPHQL_CORS_DOMAIN),
 	}))
 
 	// Compress middleware, we dont need to use this
@@ -155,7 +155,7 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	// app.Use(compress.New(compress.Config{
 	// 	Level: compress.LevelBestSpeed, // 1
 	// }))
-
+	engineEnableOtelType := viper.GetString(ENGINE_PLUS_ENABLE_OPEN_TELEMETRY)
 	// setup opentelemetry middleware for these endpoints
 	if engineEnableOtelType == "grpc" || engineEnableOtelType == "http" {
 		app.Use(otelfiber.Middleware(otelfiber.WithNext(func(c *fiber.Ctx) bool {
@@ -249,13 +249,10 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 	})
 
 	// Proxy request to an upstream url
-	app.All(engineMetaPath+"+", func(c *fiber.Ctx) error {
+	app.All(viper.GetString(ENGINE_PLUS_META_PATH)+"+", func(c *fiber.Ctx) error {
 		// check and wait for startupCtx to be done
 		waitForStartupToBeCompleted(startupCtx)
-		// Ex if engineMetaPath = "/public/meta"
-		// for ex: POST /public/meta/v1/metadata -> /v1/metadata
-		// for ex: POST /public/meta/v2/query -> /v2/query
-		// for ex: GET /public/meta/v1/version -> /v1/version
+
 		// proxy GET request to the upstream using the same header and body from the original request
 		url := "http://localhost:8881" + c.Params("+")
 		if err := proxy.Do(c, url); err != nil {
@@ -285,11 +282,6 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 			}
 			// check and wait for startupCtx to be done
 			waitForStartupToBeCompleted(startupCtx)
-			// Ex if engineMetaPath = "/scripting"
-			// for ex: POST /scripting/upload -> /upload
-			// for ex: POST /scripting/execute -> /execute
-			// for ex: GET /scripting/validate -> /validate
-			// for ex: GET /scripting/health/engine -> /health/engine
 			req := c.Request()
 			resp := c.Response()
 			// prepare the proxy request
@@ -324,17 +316,18 @@ func setupFiber(startupCtx context.Context, startupReadonlyCtx context.Context, 
 func setupRedisClient(ctx context.Context) *RedisCacheClient {
 	// setup redis client
 
-	if hasuraGqlRedisUrl == "" && hasuraGqlRedisClusterUrl == "" {
+	if viper.GetString(HASURA_GRAPHQL_REDIS_URL) == "" && viper.GetString(HASURA_GRAPHQL_REDIS_CLUSTER_URL) == "" {
 		return nil
 	}
 	groupcacheOptions := NewGroupCacheOptions()
 	// set groupcacheOptions.waitETA using value from env
-	groupcacheOptions.waitETA = engineGroupcacheWaitEta
-	groupcacheOptions.cacheMaxSize = int64(engineGroupcacheMaxSize)
+	groupcacheOptions.waitETA = viper.GetUint64(ENGINE_PLUS_GROUPCACHE_WAIT_ETA)
+	groupcacheOptions.cacheMaxSize = viper.GetInt64(ENGINE_PLUS_GROUPCACHE_MAX_SIZE)
 
 	// get list of available addresses
 	localAddress := "127.0.0.1"
-	if engineGroupcacheClusterMode == "aws_ec2" {
+	switch viper.GetString(ENGINE_PLUS_GROUPCACHE_CLUSTER_MODE) {
+	case "aws_ec2":
 		// get the local ipv4 address of the ec2 instance via the meta-data url
 		address, err := GetIpFromAwsEc2Metadata()
 		if err != nil {
@@ -342,7 +335,7 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 		} else {
 			localAddress = address
 		}
-	} else if engineGroupcacheClusterMode == "aws_ecs" {
+	case "aws_ecs":
 		// get the local ipv4 address of the container instance via the ecs meta-data
 		address, err := GetIpFromAwsEcsContainerMetadata()
 		if err != nil {
@@ -350,26 +343,23 @@ func setupRedisClient(ctx context.Context) *RedisCacheClient {
 		} else {
 			localAddress = address
 		}
-	} else if engineGroupcacheClusterMode == "host_ipnet" {
+	case "host_ipnet":
 		address, err := GetIpFromHostNetInterfaces()
 		if err != nil {
 			log.Error(err)
 		} else {
 			localAddress = address
 		}
-	} else {
+	default:
 		groupcacheOptions.disableAutoDiscovery = true
 	}
 
-	if groupcacheServerPort == "" {
-		groupcacheServerPort = "8879"
-	}
 	redisCacheClient, err := NewRedisCacheClient(
 		ctx,
-		hasuraGqlRedisClusterUrl,
-		hasuraGqlRedisUrl,
-		hasuraGqlRedisReaderUrl,
-		"http://"+localAddress+":"+groupcacheServerPort,
+		viper.GetString(HASURA_GRAPHQL_REDIS_CLUSTER_URL),
+		viper.GetString(HASURA_GRAPHQL_REDIS_URL),
+		viper.GetString(HASURA_GRAPHQL_REDIS_READER_URL),
+		"http://"+localAddress+":"+viper.GetString(ENGINE_PLUS_GROUPCACHE_PORT),
 		groupcacheOptions,
 	)
 	if err != nil {
@@ -399,6 +389,7 @@ func main() {
 	startupCtx, startupDoneFn := context.WithTimeout(mainCtx, 60*time.Second)
 	startupReadonlyCtx, startupReadonlyDoneFn := context.WithTimeout(mainCtx, 180*time.Second)
 	// this must happen as early as possible
+	engineEnableOtelType := viper.GetString(ENGINE_PLUS_ENABLE_OPEN_TELEMETRY)
 	otelTracerProvider := InitTracerProvider(mainCtx, engineEnableOtelType)
 	// setup resources
 	redisCacheClient := setupRedisClient(mainCtx)
@@ -413,7 +404,7 @@ func main() {
 	// we dont need to wait for the server to start
 	// as we will wait for the startup to be completed
 	go func() {
-		err := app.Listen(viper.GetString("engineServerHost") + ":" + viper.GetString("engineServerPort"))
+		err := app.Listen(viper.GetString(ENGINE_PLUS_SERVER_HOST) + ":" + viper.GetString(ENGINE_PLUS_SERVER_PORT))
 		if err != nil {
 			// trigger graceful shutdown
 			mainCtxCancelFn()

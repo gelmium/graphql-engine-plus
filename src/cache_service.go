@@ -14,6 +14,7 @@ import (
 	"github.com/mailgun/groupcache/v2"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
+	"github.com/spf13/viper"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -317,7 +318,7 @@ func NewRedisCacheClient(ctx context.Context, redisClusterUrl string, redisUrl s
 									}
 								}
 							}
-							if debugMode {
+							if viper.GetBool(DEBUG_MODE) {
 								// This is not really an error. If timeout is reached, the caller will proceed to retrieve the data from its source.
 								slog.Error("Timeout while wait for cache key to be populated", "cacheKey", cacheKey, "eta", eta)
 							}
@@ -371,7 +372,7 @@ func (client *RedisCacheClient) Get(ctx context.Context, key string) ([]byte, er
 		spanGroupcache.End()
 		if err != nil {
 			span.SetAttributes(attribute.Bool("cache.hit", false))
-			if debugMode {
+			if viper.GetBool(DEBUG_MODE) {
 				// only print this log in debug mode
 				slog.Error("Error when groupcache.Get", "error", err.Error())
 			}
