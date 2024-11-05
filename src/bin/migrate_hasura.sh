@@ -5,12 +5,24 @@ graphql-engine serve --server-port 8881 &
 pid=$!
 # wait till graphql-engine RW is up using healthz endpoint
 while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' localhost:8881/healthz)" != "200" ]]; do sleep 1; done
-hasura deploy --project /graphql-engine/schema || exit 1;
-# show metadata inconsistency if there is any
-hasura metadata inconsistency list --project /graphql-engine/schema
-# send SIGTERM to graphql-engine RW
+echo "Deploying migrations and metadata"
+hasura deploy --project /graphql-engine/schema --endpoint "http://localhost:8881"
+# save the exit code of the previous command
+exit_code=$?
+# if the exit code is 0, check for metadata inconsistency
+if [[ $exit_code -eq 0 ]]; then
+  # show metadata inconsistency if there is any
+  hasura metadata inconsistency list --project /graphql-engine/schema --endpoint "http://localhost:8881"
+  # save the exit code of the previous command
+  exit_code=$?
+fi
+# send SIGTERM to stop graphql-engine RW
 kill -15 $pid
 # wait till graphql-engine RW is down, by checking if the port is still open
-while [[ "$(lsof -i :8881)" ]]; do sleep 1; done
-
-
+while [[ "$(curl -s -o /dev/null -w ''%{http_code}'' localhost:8881/healthz)" == "200" ]]; do sleep 1; done
+if [[ $exit_code -eq 0 ]]; then
+  # print in green color
+  echo -e "\033[0;32mMigrations and metadata deployed successfully\033[0m"
+fi
+# exit with the exit code of executed commands
+exit $exit_code

@@ -24,18 +24,20 @@ up:  ## run the project in local
 logs-follow-graphql-engine:
 	docker compose logs -f graphql-engine
 PROJECT := ./example/graphql-engine/schema/v1
-hasura-console-example-v1:  ## run hasura console for schema v1 localy at port 9695 
+hasura-console:  ## run hasura console for schema v1 localy at port 9695 
 	hasura console --project $(PROJECT) --envfile .hasura-cli.env --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --api-port 9693 --no-browser
-hasura-metadata-export-example-v1:  ## export graphql metadata to yaml files in example
+hasura-metadata-export:  ## export graphql metadata to yaml files in example
 	hasura metadata export --project $(PROJECT) --envfile .hasura-cli.env
-hasura-metadata-apply-example-v1:  ## apply graphql metadata yaml files in example
+hasura-metadata-apply:  ## apply graphql metadata yaml files in example
 	hasura metadata apply --project $(PROJECT) --envfile .hasura-cli.env
-hasura-metadata-show-inconsistent-example-v1:  ## show inconsistent metadata yaml files in example
+hasura-metadata-show-inconsistent:  ## show inconsistent metadata yaml files in example
 	hasura metadata inconsistency list --project $(PROJECT) --envfile .hasura-cli.env
-hasura-deploy-example-v1:  ## run migrations and apply graphql metadata yaml files in example
+hasura-deploy:  ## run migrations and apply graphql metadata yaml files in example
 	hasura deploy --project $(PROJECT) --envfile .hasura-cli.env
-hasura-migrate-create-migration-from-server-example-v1:
-	hasura migrate create "CHANGE-ME" --from-server --database-name default --schema public --project $(PROJECT) --envfile .hasura-cli.env
+hasura-migrate-create-migration:
+	hasura migrate create "CHANGE-ME" --project $(PROJECT) --envfile .hasura-cli.env
+hasura-migrate-apply-down-1:
+	hasura migrate apply --down 1 --project $(PROJECT) --envfile .hasura-cli.env
 
 run-migrate-hasura:
 	docker compose run graphql-engine /bin/migrate

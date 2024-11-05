@@ -55,6 +55,7 @@ services:
     volumes:
       - ./src/scripting:/graphql-engine/scripting
       - ./example/graphql-engine/scripts:/graphql-engine/scripts
+      - ./example/graphql-engine/schema/v1:/graphql-engine/schema
     env_file:
       - ./.env
 volumes:
