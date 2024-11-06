@@ -24,8 +24,8 @@ up:  ## run the project in local
 logs-follow-graphql-engine:
 	docker compose logs -f graphql-engine
 PROJECT := ./example/graphql-engine/schema/v1
-hasura-console:  ## run hasura console for schema v1 localy at port 9695 
-	hasura console --project $(PROJECT) --envfile .hasura-cli.env --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --api-port 9693 --no-browser
+hasura-console:  ## run hasura console for schema v1 localy at port 9695 (require port 9693 as well)
+	hasura console --project $(PROJECT) --envfile .hasura-cli.env --address 0.0.0.0 --log-level DEBUG --api-host http://localhost --no-browser
 hasura-metadata-export:  ## export graphql metadata to yaml files in example
 	hasura metadata export --project $(PROJECT) --envfile .hasura-cli.env
 hasura-metadata-apply:  ## apply graphql metadata yaml files in example
@@ -41,7 +41,7 @@ hasura-migrate-apply-down-1:
 
 run-migrate-hasura:
 	docker compose run graphql-engine /bin/migrate
-N := 1000
+
 run-graphql-benchmark:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.query.yaml" --outfile="tmp/report.json"
 run-graphql-benchmark-readonly:
@@ -100,8 +100,12 @@ test.graphql-engine-plus.query:
 test.graphql-engine-plus.query-cache:
 	@curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE3MTUyNDIyMDAsImV4cCI6MTc0Njc3ODIwMCwiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsImFjY291bnRfaWQiOiIxIiwidG9rZW5fdHlwZSI6InVzZXIifQ.4MDc5lDRW-G05UP9VS2SJoskqG6FIb12u1pVj6jUUts" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1
 	@curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJPbmxpbmUgSldUIEJ1aWxkZXIiLCJpYXQiOjE3MTUyNDIyMDAsImV4cCI6MTc0Njc3ODIwMCwiYXVkIjoid3d3LmV4YW1wbGUuY29tIiwic3ViIjoianJvY2tldEBleGFtcGxlLmNvbSIsImFjY291bnRfaWQiOiIxIiwidG9rZW5fdHlwZSI6InVzZXIifQ.4MDc5lDRW-G05UP9VS2SJoskqG6FIb12u1pVj6jUUts" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 5) {id}}"}' http://localhost:$(PORT)/public/graphql/v1readonly
-test.graphql-engine-plus.query-gzip:
-	@curl -X POST -H "Accept-Encoding: gzip" -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 50) {id}}"}' http://localhost:$(PORT)/public/graphql/v1 --output /tmp/result-query.json.gz
+test.graphql-engine-plus.query-gzip: 
+	# if there is few data, content will not be gzip
+	@curl -X POST -H "Accept-Encoding: gzip" -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery {customer(offset: 1, limit: 255) {id}}"}' http://localhost:$(PORT)/public/graphql/v1 --output /tmp/result-query.json.gz
+	@gunzip -c /tmp/result-query.json.gz
+test.graphql-engine-plus.query-gzip-cache:
+	@curl -X POST -H "Accept-Encoding: gzip" -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"query MyQuery @cached(ttl: 60){customer(offset: 1, limit: 255) {id}}"}' http://localhost:$(PORT)/public/graphql/v1 --output /tmp/result-query.json.gz
 	@gunzip -c /tmp/result-query.json.gz
 PORT1 := 8001
 PORT2 := 8002
@@ -118,3 +122,8 @@ test.graphql-engine-plus.mutation:
 	# fire a curl request to graphql-engine-plus
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -H "X-Hasura-Role: user" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:$(PORT)/public/graphql/v1
 	@curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation MyMutation { quickinsert_customer_one(object: {first_name: \"test\", external_ref_list: []}) { id first_name created_at } } "}' http://localhost:$(PORT)/public/graphql/v1
+
+N := 100
+test.graphql-engine-plus.mutation-many:
+	# fire many curl request to graphql-engine-plus
+	@seq 1 $(N) | xargs -I {} -P 10 curl -X POST -H "Content-Type: application/json" -H "X-Hasura-Admin-Secret: gelsemium" -d '{"query":"mutation CustomerMutation { insert_customer_one(object: {first_name: \"test\", external_ref_list: [\"text_external_ref\"], last_name: \"cus\"}) { id } }"}' http://localhost:$(PORT)/public/graphql/v1
