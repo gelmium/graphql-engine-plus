@@ -9,6 +9,7 @@ from aiohttp import web
 from aiohttp.abc import AbstractAccessLogger
 import asyncio
 import sys
+import aiohttp.typedefs
 import redis.asyncio as redis
 import time
 from gql_client import GqlAsyncClient
@@ -17,7 +18,7 @@ import uvloop
 import aioboto3
 import contextlib
 import msgspec
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TypeVar
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from opentelemetry import trace
@@ -45,7 +46,7 @@ if ENGINE_PLUS_ENABLE_BOTO3:
 
 ENGINE_PLUS_ALLOW_EXECURL = os.getenv("ENGINE_PLUS_ALLOW_EXECURL")
 ENGINE_PLUS_EXECUTE_SECRET = os.getenv("ENGINE_PLUS_EXECUTE_SECRET")
-DEBUG_MODE = os.getenv("DEBUG", "").lower() in {"true", "t", "1"}
+DEBUG_MODE = os.getenv("DEBUG_MODE", "").lower() in {"true", "t", "1"}
 
 logger = logging.getLogger("scripting-server")
 # Pre create json encoder/decoder for server to reuse for every request
@@ -232,18 +233,18 @@ async def exec_script(request: web.Request, config) -> web.Response:
                 "At least one of these headers must be specified: X-Engine-Plus-Execute-File, X-Engine-Plus-Execute-Url"
             )
         # execution of the script
-        # The script must define this function: `async def main(request, body):`
+        # The script must define this function: `async def main(request, env):`
         async with start_as_current_span_async(
             "run",
             kind=trace.SpanKind.INTERNAL,
         ):
             try:
                 task = asyncio.get_running_loop().create_task(
-                    exec_main_func(request, config["body"])
+                    exec_main_func(request, config["env"])
                 )
             except TypeError:
                 raise ValueError(
-                    "The script must define this function: `async def main(request, body):`"
+                    "The script must define this function: `async def main(request, env):`"
                 )
             # schedule to run the task and wait for result.
             return await task
@@ -256,6 +257,21 @@ async def execute_code_handler(request: web.Request):
     config = {
         "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
         "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
+        "env": {
+            "json_encoder": request.app.get("json_encoder"),
+            "json_decoder": request.app.get("json_decoder"),
+            "exec_cache": request.app.get("exec_cache"),
+            "redis_cluster": request.app.get("redis_cluster"),
+            "redis_client": request.app.get("redis_client"),
+            "redis_cluster_reader": request.app.get("redis_cluster_reader"),
+            "redis_client_reader": request.app.get("redis_client_reader"),
+            "graphql_client": request.app.get("graphql_client"),
+            "boto3_session": request.app.get("boto3_session"),
+            "boto3_context_stack": request.app.get("boto3_context_stack"),
+            "boto3_dynamodb": request.app.get("boto3_dynamodb"),
+            "boto3_s3": request.app.get("boto3_s3"),
+            "boto3_sqs": request.app.get("boto3_sqs"),
+        },
     }
     async with start_as_current_span_async(
         "scripting-server: /execute",
@@ -263,11 +279,6 @@ async def execute_code_handler(request: web.Request):
         request=request,
     ) as parent:
         try:
-            async with start_as_current_span_async(
-                "parse-body",
-                kind=trace.SpanKind.INTERNAL,
-            ):
-                config["body"] = json_decoder.decode(await request.text())
             ### execute the python script using the configuration
             result = await exec_script(request, config)
             # check if result is a web.Response
@@ -327,26 +338,19 @@ async def execute_code_handler(request: web.Request):
         )
 
 
-class ValidationData(msgspec.Struct):
-    input: List[Dict[str, Any]]
-
-
-class ValidatePayload(msgspec.Struct):
-    data: ValidationData
-    role: str
-    session_variables: Dict[str, str]
-    version: int
-
-
-validate_json_decoder = msgspec.json.Decoder(ValidatePayload)
-
-
 async def validate_json_code_handler(request: web.Request):
     # mark starting time
     request.start_time = time.time()
     config = {
         "execfile": request.headers.get("X-Engine-Plus-Execute-File"),
         "execurl": request.headers.get("X-Engine-Plus-Execute-Url"),
+        "env": {
+            # only these dependencies are allowed to be used for validation
+            "json_encoder": request.app.get("json_encoder"),
+            "json_decoder": request.app.get("json_decoder"),
+            "exec_cache": request.app.get("exec_cache"),
+            "graphql_client": request.app.get("graphql_client"),
+        },
     }
     async with start_as_current_span_async(
         "scripting-server: /validate",
@@ -354,11 +358,6 @@ async def validate_json_code_handler(request: web.Request):
         request=request,
     ) as parent:
         try:
-            async with start_as_current_span_async(
-                "parse-body",
-                kind=trace.SpanKind.INTERNAL,
-            ):
-                config["body"] = validate_json_decoder.decode(await request.text())
             ### execute the python script with the configuration
             result = await exec_script(request, config)
             status_code = 200
@@ -410,7 +409,7 @@ def exec_and_verify_script(exec_content: str):
     except Exception as e:
         if isinstance(e, KeyError) and "main" in str(e):
             raise ValueError(
-                "The script must define this function `async def main(request: aiohttp.web_request.Request, body):`"
+                "The script must define this function `async def main(request: aiohttp.web_request.Request, env):`"
             )
         if isinstance(e, SyntaxError):
             raise ValueError(
@@ -420,18 +419,18 @@ def exec_and_verify_script(exec_content: str):
             raise e
     if not inspect.iscoroutinefunction(exec_main_func):
         raise ValueError(
-            "The main function must be an async function `async def main(request: aiohttp.web_request.Request, body):"
+            "The main function must be an async function `async def main(request: aiohttp.web_request.Request, env):"
         )
     signature = inspect.signature(exec_main_func)
     if str(signature) not in {
-        "(request: aiohttp.web_request.Request, body)",
-        "(request: aiohttp.web_request.Request, body) -> aiohttp.web_response.Response",
+        "(request: aiohttp.web_request.Request, env)",
+        "(request: aiohttp.web_request.Request, env) -> aiohttp.web_response.Response",
     }:
         logger.error(
             f"Invalid signature of main function when upload script: {signature}"
         )
         raise ValueError(
-            "The main function must be defined with this signature `async def main(request: aiohttp.web_request.Request, body) -> aiohttp.web_response.Response:"
+            "The main function must be defined with this signature `async def main(request: aiohttp.web_request.Request, env) -> aiohttp.web_response.Response:"
         )
     return exec_main_func
 
@@ -624,6 +623,10 @@ async def get_app():
     app["graphql_client"] = GqlAsyncClient(tracer)
     app["json_encoder"] = json_encoder
     app["json_decoder"] = json_decoder
+    # override the default aiohttp typedef JSONEncoder, JSONDecoder
+    aiohttp.typedefs.DEFAULT_JSON_ENCODER = json_encoder.encode
+    aiohttp.typedefs.DEFAULT_JSON_DECODER = json_decoder.decode
+
     app["exec_cache"] = exec_cache
 
     # init boto3 session if enabled, this allow faster boto3 connection in scripts

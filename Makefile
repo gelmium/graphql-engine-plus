@@ -21,6 +21,8 @@ lint:
 up:  ## run the project in local
 	make build.out ARCH=$(shell dpkg --print-architecture)
 	docker compose up -d
+	export $$(grep -v '^#' .env); bash scripts/prepare_local_dynamodb_table.sh
+
 logs-follow-graphql-engine:
 	docker compose logs -f graphql-engine
 PROJECT := ./example/graphql-engine/schema/v1
@@ -47,7 +49,7 @@ run-graphql-benchmark:
 run-graphql-benchmark-readonly:
 	docker run --rm --net=host -v "$$PWD/example/benchmark":/app/tmp -it gelmium/graphql-bench query --config="tmp/config.readonly-query.yaml" --outfile="tmp/report-readonly.json"	
 redis-del-all-data:
-	docker compose exec redis bash -c "redis-cli --scan --pattern data:* | xargs redis-cli del"
+	docker compose exec redis bash -c "redis-cli -u redis://redisuser:redispwd@127.0.0.1:6379 --scan --pattern '*' | xargs redis-cli -u redis://redisuser:redispwd@127.0.0.1:6379 del"
 dynamodb-show-all-item:
 	aws dynamodb --endpoint-url http://localhost:18000 execute-statement --statement 'SELECT * FROM "public.customer"'
 

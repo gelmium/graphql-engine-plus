@@ -3,4 +3,13 @@
 [ -f ".make.env" ] || cp default.make.env .make.env
 [ -f "~/.Makefile" ] || touch ~/.Makefile
 [ -f "example/graphql-engine/schema/v1/.hasura-cli.env" ] || cp default.hasura-cli.env example/graphql-engine/schema/v1/.hasura-cli.env
+
+# check if number of line in .make.env is equal to default.make.env
+if [ $(wc -l < .make.env) -ne $(wc -l < default.make.env) ]; then
+  echo -e "\e[31mYour .make.env file may not be up to date, please compare it with default.make.env\e[0m"
+fi
+# check if number of line in .env is equal to default.env
+if [ $(wc -l < .env) -ne $(wc -l < default.env) ]; then
+  echo -e "\e[31mYour .env file may not be up to date, please compare it with default.env\e[0m"
+fi
 echo "This script setup all system config/files which required to run the project"

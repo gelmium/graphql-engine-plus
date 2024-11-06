@@ -10,12 +10,12 @@ if TYPE_CHECKING:
 # do not import here unless for type hinting, must import in main() function
 
 
-async def main(request: web.Request, body):
+async def main(request: web.Request, env):
     import logging, time
     from datetime import datetime
     from opentelemetry import trace
-
-    payload = body
+    # read body payload
+    payload = await request.json()
     SCRIPT_NAME = "sync_to_dynamodb.py"
     tracer = trace.get_tracer(SCRIPT_NAME)
     logger = logging.getLogger(SCRIPT_NAME)
@@ -30,16 +30,15 @@ async def main(request: web.Request, body):
         IS_CRON_JOB = request.query.get("IS_CRON_JOB")
         # require redis client to be initialized, HASURA_GRAPHQL_REDIS_URL
         # or HASURA_GRAPHQL_REDIS_CLUSTER_URL must be set in environment
-        try:
-            r: Redis = request.app["redis_cluster"]
-        except KeyError:
-            r: Redis = request.app["redis_client"]
+        r: Redis = env["redis_cluster"]
+        if r is None:
+            r: Redis = env["redis_client"]
 
         # require boto3 session to be initialized, by set environment
         # ENGINE_PLUS_ENABLE_BOTO3 to include 'dynamodb'
-        boto3_dynamodb: DynamoDBServiceResource = request.app["boto3_dynamodb"]
-        json_encoder: Encoder = request.app["json_encoder"]
-        json_decoder: Decoder = request.app["json_decoder"]
+        boto3_dynamodb: DynamoDBServiceResource = env["boto3_dynamodb"]
+        json_encoder: Encoder = env["json_encoder"]
+        json_decoder: Decoder = env["json_decoder"]
         action = payload["event"]["op"]
         session_variables = payload["event"].get("session_variables")
         trace_context = payload["event"].get("trace_context")
@@ -56,39 +55,7 @@ async def main(request: web.Request, body):
         table_name = f"{payload['table']['schema']}.{payload['table']['name']}"
         sync_queue_name = "sync-queue:" + table_name
         delete_queue_name = "sync-queue-delete:" + table_name
-        # check if the dynamodb table exist
-        provisioning_waiter = None
-        response = await boto3_dynamodb.meta.client.list_tables()
-        if table_name in response["TableNames"]:
-            logger.debug(f"Table `{table_name}` already exists")
-        else:
-            # create a new dynamodb table
-            logger.info(f"Creating table `{table_name}`")
-            try:
-                await boto3_dynamodb.create_table(
-                    TableName=table_name,
-                    KeySchema=[
-                        {"AttributeName": "id", "KeyType": "HASH"},
-                    ],
-                    AttributeDefinitions=[
-                        {"AttributeName": "id", "AttributeType": "S"},
-                    ],
-                    # on-demand capacity mode
-                    BillingMode="PAY_PER_REQUEST",
-                )
-            except boto3_dynamodb.meta.client.exceptions.ResourceInUseException:
-                logger.info(
-                    f"Table `{table_name}` already exists while attempting to create"
-                )
-            except Exception as e:
-                logger.error(f"Failed to create table `{table_name}`: {e}")
-                return {
-                    "status": "failed",
-                    "reason": f"Failed to create table `{table_name}`",
-                }
-            # create a waiter to wait for the table to be provisioned if required to do so.
-            provisioning_waiter = boto3_dynamodb.meta.client.get_waiter("table_exists")
-
+        
         if action == "INSERT" or action == "UPDATE" or action == "MANUAL":
             if IS_CRON_JOB:
                 queue_len = await r.llen(sync_queue_name)
@@ -100,8 +67,6 @@ async def main(request: web.Request, body):
                 )
             # check if the queue is full and process it
             if queue_len >= BATCH_SIZE:
-                if provisioning_waiter:
-                    await provisioning_waiter.wait(TableName=table_name)
                 # pop a batch from the queue
                 # and batch write it to dynamodb
                 if IS_CRON_JOB:
@@ -164,8 +129,6 @@ async def main(request: web.Request, body):
                 )
             # check if the queue is full and process it
             if queue_len >= BATCH_SIZE:
-                if provisioning_waiter:
-                    await provisioning_waiter.wait(TableName=table_name)
                 count = 0
                 # pop a batch from the queue
                 # and batch write it to dynamodb

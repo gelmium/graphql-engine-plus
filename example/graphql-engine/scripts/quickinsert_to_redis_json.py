@@ -7,31 +7,30 @@ if TYPE_CHECKING:
 # do not import here unless for type hinting, must import in main() function
 
 
-async def main(request: web.Request, body):
+async def main(request: web.Request, env):
     from datetime import datetime, timezone
     import uuid, logging
+    from aiohttp.web import Response
 
     logger = logging.getLogger("quickinsert_to_redis_json.py")
     # required params from query string
     table_schema = "public"
     table_name = "customer"
     STREAM_MAX_LEN = request.query.get("stream_max_len", 100000)
-    if "object" not in body["input"]:
+    # read body
+    payload = await request.json()
+    if "object" not in payload["input"]:
         # ignore this request
         return
 
     # require redis client to be initialized in the server.py
-    try:
-        r: Redis = request.app["redis_cluster"]
-    except KeyError:
-        try:
-            r: Redis = request.app["redis_client"]
-        except KeyError:
-            # ignore this request since there is no redis client configured
-            return
-    json_encoder: Encoder = request.app["json_encoder"]
+    r: Redis = env["redis_cluster"]
+    if r is None:
+        r: Redis = env["redis_client"]
+
+    json_encoder: Encoder = env["json_encoder"]
     # clone the object json data in payload
-    payload_input_object = body["input"]["object"]
+    payload_input_object = payload["input"]["object"]
     payload_input_object["id"] = str(uuid.uuid4())
     # set auto timestamp key to current epoch
     now = datetime.now(timezone.utc).astimezone()
@@ -40,11 +39,17 @@ async def main(request: web.Request, body):
     # send the payload to redis stream `audit:$schema.$table:insert` using XADD command
     stream_key = f"worker:{table_schema}.{table_name}:insert"
     logger.info(f"Push object.id={payload_input_object['id']} to stream: {stream_key}")
+    input_object_json = json_encoder.encode(payload_input_object)
     await r.xadd(
         stream_key,
         {
-            "payload": json_encoder.encode(payload_input_object),
+            "input_object": input_object_json,
         },
         maxlen=STREAM_MAX_LEN,
     )
-    return payload_input_object
+    response = Response(
+        status=201,
+        content_type="application/json",
+        body=input_object_json
+    )
+    return response
