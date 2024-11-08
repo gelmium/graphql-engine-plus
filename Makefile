@@ -40,7 +40,9 @@ hasura-migrate-create-migration:
 	hasura migrate create "CHANGE-ME" --project $(PROJECT) --envfile .hasura-cli.env
 hasura-migrate-apply-down-1:
 	hasura migrate apply --down 1 --project $(PROJECT) --envfile .hasura-cli.env
-
+FROM := 1692542670459
+hasura-migrate-squash:
+	hasura migrate squash --database-name "default" --from $(FROM) --name "SQUASHED-CHANGE-ME" --project $(PROJECT) --envfile .hasura-cli.env
 run-migrate-hasura:
 	docker compose run graphql-engine /bin/migrate
 
