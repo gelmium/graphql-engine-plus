@@ -32,9 +32,9 @@ jobs:
           push: true
           tags:  |
             gelmium/graphql-engine-plus:latest
-            gelmium/graphql-engine-plus:v2.44.0
+            gelmium/graphql-engine-plus:v2.45.2
           build-args:  |
-            HASURA_GRAPHQL_ENGINE_VERSION=v2.44.0
+            HASURA_GRAPHQL_ENGINE_VERSION=v2.45.2
           target: server
           cache-from: type=registry,ref=gelmium/graphql-engine-plus:buildcache
           cache-to: type=registry,ref=gelmium/graphql-engine-plus:buildcache,mode=max

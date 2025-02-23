@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
     --mount=type=bind,target=. \
     go build -o /bin/server .
 
-FROM hasura/graphql-engine:${HASURA_GRAPHQL_ENGINE_VERSION:-v2.44.0} AS server
+FROM hasura/graphql-engine:${HASURA_GRAPHQL_ENGINE_VERSION:-v2.45.2} AS server
 WORKDIR /graphql-engine
 
 # install python and pip
